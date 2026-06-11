@@ -8,6 +8,7 @@ struct SettingsView: View {
             ActivityTab().tabItem { Label("Indexing", systemImage: "arrow.triangle.2.circlepath") }
             ContentTypesTab().tabItem { Label("Content", systemImage: "square.grid.2x2") }
             PerformanceTab().tabItem { Label("Performance", systemImage: "speedometer") }
+            ChatTab().tabItem { Label("Chat", systemImage: "text.bubble") }
             IndexTab().tabItem { Label("Storage", systemImage: "externaldrive") }
             HistoryTab().tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
             ServingTab().tabItem { Label("Serving", systemImage: "network") }

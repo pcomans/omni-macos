@@ -29,7 +29,7 @@ struct ResultsList<Footer: View>: View {
     var body: some View {
         Group {
             switch model.viewMode {
-            case .list: listView
+            case .list, .chat: listView   // chat replaces the results pane upstream; never shown here
             case .grid: gridView
             }
         }
@@ -215,7 +215,7 @@ struct ResultsList<Footer: View>: View {
         // actually have several chunks. The list expands inline; the grid opens a popover.
         if hit.chunkCount > 1 {
             switch model.viewMode {
-            case .list:
+            case .list, .chat:
                 Button(expanded.contains(path) ? "Hide Matching Passages" : "Show Matching Passages") {
                     toggle(path)
                 }

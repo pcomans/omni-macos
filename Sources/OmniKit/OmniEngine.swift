@@ -144,6 +144,9 @@ public final class OmniEngine: Embedder, @unchecked Sendable {
     private let cond = NSCondition()
     private var busy = false
     private var highWaiting = 0
+    // Chat (LLM generation) is a third priority tier between high (search) and low (indexing):
+    // a search query preempts generation, and generation in turn preempts indexing.
+    private var chatWaiting = 0
     /// Media is indexed as documents -> the "Document: " prefix (official model card).
     private let docPrefix: [Int]
     /// The "Query: " prefix. v5-omni applies the Query:/Document: distinction to EVERY modality
@@ -251,25 +254,41 @@ public final class OmniEngine: Embedder, @unchecked Sendable {
         return try await OmniEngine.loadValidated(modelDir: dir)
     }
 
-    /// Serialize MLX work. `highPriority` calls run before any waiting low-priority
-    /// (indexing) calls; a low-priority call also yields whenever a high-priority call
-    /// is queued, so a search waits at most one in-flight embed.
-    private func run<T>(highPriority: Bool, _ work: () -> T) -> T {
+    /// Three GPU priority tiers, all serialized through one gate (MLX is not thread-safe):
+    ///   .high  (interactive search)  waits only for the in-flight op.
+    ///   .chat  (LLM generation)      also yields to any queued search.
+    ///   .low   (indexing/projection) also yields to any queued search OR chat.
+    /// So a search preempts both chat and indexing, and chat preempts indexing, each waiting at most
+    /// one in-flight op (for chat that is a single decode step, so search stays responsive mid-answer).
+    private enum GatePriority { case high, chat, low }
+
+    private func run<T>(_ priority: GatePriority, _ work: () -> T) -> T {
         cond.lock()
-        if highPriority { highWaiting += 1 }
-        while busy || (!highPriority && highWaiting > 0) { cond.wait() }
+        switch priority { case .high: highWaiting += 1; case .chat: chatWaiting += 1; case .low: break }
+        while busy
+            || (priority == .low && (highWaiting > 0 || chatWaiting > 0))
+            || (priority == .chat && highWaiting > 0) { cond.wait() }
         busy = true
-        if highPriority { highWaiting -= 1 }
+        switch priority { case .high: highWaiting -= 1; case .chat: chatWaiting -= 1; case .low: break }
         cond.unlock()
         let result = work()
         cond.lock(); busy = false; cond.broadcast(); cond.unlock()
         return result
     }
 
+    /// Back-compat overload for existing call sites (search = high, indexing = low).
+    private func run<T>(highPriority: Bool, _ work: () -> T) -> T {
+        run(highPriority ? .high : .low, work)
+    }
+
     /// Run low-priority GPU work behind the same gate as indexing, so an interactive query
     /// (high priority) preempts between calls. Used by the folder-projection animation, one
     /// ~10-epoch batch at a time. Internal: same-module callers only (ProjectionEngine).
-    func runLowPriorityGPU<T>(_ work: () -> T) -> T { run(highPriority: false, work) }
+    func runLowPriorityGPU<T>(_ work: () -> T) -> T { run(.low, work) }
+
+    /// Run chat (LLM generation) GPU work at the middle tier: it yields to interactive search but
+    /// preempts background indexing. Called once per decode step by ``ChatEngine``.
+    func runChatGPU<T>(_ work: () -> T) -> T { run(.chat, work) }
 
     /// Embed a query for interactive search - runs at high priority.
     public func embedQuery(_ text: String) -> [Float] {

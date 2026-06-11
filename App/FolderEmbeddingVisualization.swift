@@ -114,7 +114,9 @@ struct FolderEmbeddingVisualization: View {
                         caption
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                             .padding(Design.gapLarge)
-                            .allowsHitTesting(false)
+                            // Hit-testing stays ON so the caption's "Chat" button is clickable; only
+                            // the chip itself captures taps (the rest is transparent, so the map still
+                            // pans/clicks behind it), exactly like the zoom controls below.
 
                         zoomControls
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
@@ -273,6 +275,14 @@ struct FolderEmbeddingVisualization: View {
                                        : "\(count) file\(count == 1 ? "" : "s")")
                         .foregroundStyle(.secondary).lineLimit(1)
                 }
+                Divider().frame(height: 14)
+                Button {
+                    model.chatWithFolder(model.selectedFolderForViz)
+                } label: {
+                    Label("Chat", systemImage: "text.bubble")
+                }
+                .buttonStyle(.plain).foregroundStyle(.tint)
+                .help("Ask questions about the files in \(folderName)")
             }
         }
         .font(.callout)
@@ -325,7 +335,7 @@ struct FolderEmbeddingVisualization: View {
         // (which can fire selectedFolderForViz AND projectionGeneration in one tick) don't stack loops.
         rebuildTask?.cancel()
         rebuildTask = Task { @MainActor in
-            let built = await Task.detached(priority: .userInitiated) { () -> (pos: [SIMD2<Float>], col: [SIMD4<Float>], bbox: SIMD4<Float>, kinds: [FileKind])? in
+            let built = await Task.detached(priority: .userInitiated) { [pts, baseHSB, alpha] () -> (pos: [SIMD2<Float>], col: [SIMD4<Float>], bbox: SIMD4<Float>, kinds: [FileKind])? in
                 if Task.isCancelled { return nil }
                 var pos = [SIMD2<Float>](); pos.reserveCapacity(pts.count)
                 var col = [SIMD4<Float>](); col.reserveCapacity(pts.count)

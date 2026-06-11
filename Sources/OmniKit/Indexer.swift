@@ -137,8 +137,10 @@ public final class Indexer: @unchecked Sendable {
     // There is deliberately NO per-file chunk-count cap: the only bound on text coverage is
     // FileExtractor.maxTextBytes (the extraction read itself). A 40-chunk cap here used to
     // silently truncate long documents to ~64KB while claiming a 2MB read limit.
-    public var chunkOverlap = 200
-    public var snippetLength = 220
+    // Read-only: chunking is delegated to the shared TextChunker (the chat RAG builder re-derives
+    // chunks with it, so these must never diverge from its constants).
+    public var chunkOverlap: Int { TextChunker.overlap }
+    public var snippetLength: Int { TextChunker.snippetLength }
     // Pages of a scanned PDF rasterized + patchified per streamed group in the embed stage.
     // Bounds host RAM (a page's raw patches are ~40MB at the default 1568px), NOT total pages -
     // any page count gets indexed, group by group, with the next group prefetched off-thread.
@@ -843,44 +845,19 @@ public final class Indexer: @unchecked Sendable {
         return isCancelled ? [] : out
     }
 
+    // Chunking lives in the shared `TextChunker` so the chat RAG context builder can re-derive a
+    // retrieved chunk's full text identically (see TextChunker). These delegate, preserving the
+    // indexer's existing signatures (and the `settings`/`TextOrigin` types it threads through).
     func chunk(_ text: String, settings: IndexSettings, origin: TextOrigin) -> [TextPiece] {   // internal for tests
-        let limit = max(200, settings.maxCharsPerChunk)   // user-set; floor keeps chunks meaningful
-        let totalCount = text.count
-        if totalCount <= limit { return [TextPiece(text: text, locator: "")] }   // single chunk: position is trivial
-        // No chunk-count cap: coverage is bounded only by FileExtractor.maxTextBytes at extraction.
-        // The Character array is ~16B/Character; estimatedDecodedBytes accounts for it so the
-        // pipeline's byte budget throttles concurrent large files instead of a silent truncation.
-        let scalars = Array(text)
-        var pieces: [TextPiece] = []
-        var start = 0
-        let step = max(1, limit - chunkOverlap)
-        var line = 1          // running line number at `lineMark` (plain origin; one forward pass total)
-        var lineMark = 0
-        func locatorFor(_ start: Int) -> String {
-            switch origin {
-            case .plain:
-                while lineMark < start { if scalars[lineMark].isNewline { line += 1 }; lineMark += 1 }
-                return "Line \(line)"
-            case .paged(let starts):
-                guard !starts.isEmpty else { return "" }
-                var lo = 0, hi = starts.count - 1   // last page whose start offset <= chunk start
-                while lo < hi { let mid = (lo + hi + 1) / 2; if starts[mid] <= start { lo = mid } else { hi = mid - 1 } }
-                return "Page \(lo + 1)"
-            case .opaque:
-                return ""
-            }
+        let o: TextChunker.Origin
+        switch origin {
+        case .plain: o = .plain
+        case .paged(let starts): o = .paged(starts)
+        case .opaque: o = .opaque
         }
-        while start < scalars.count {
-            let end = min(start + limit, scalars.count)
-            pieces.append(TextPiece(text: String(scalars[start ..< end]), locator: locatorFor(start)))
-            if end == scalars.count { break }
-            start += step
-        }
-        return pieces
+        return TextChunker.chunk(text, maxChars: settings.maxCharsPerChunk, origin: o)
+            .map { TextPiece(text: $0.text, locator: $0.locator) }
     }
 
-    private func snippet(_ text: String) -> String {
-        let collapsed = text.split(whereSeparator: { $0.isNewline || $0 == "\t" }).joined(separator: " ")
-        return String(collapsed.prefix(snippetLength))
-    }
+    private func snippet(_ text: String) -> String { TextChunker.snippet(text) }
 }

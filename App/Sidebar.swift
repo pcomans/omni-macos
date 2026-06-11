@@ -48,6 +48,11 @@ struct Sidebar: View {
                     // Native source-list management: right-click to act, Delete to remove the
                     // selected folder. No always-on button cluttering the row.
                     .contextMenu {
+                        Button("Chat with This Folder") {
+                            selection = .folder(url)
+                            model.chatWithFolder(url)
+                        }
+                        Divider()
                         // Persistent per-folder toggle (not a transient pause of a running pass):
                         // a paused folder is excluded from indexing and from live file-change
                         // updates; its already-indexed files stay searchable.
@@ -90,9 +95,12 @@ struct Sidebar: View {
                 if !model.runHistoryQuery(item) { selection = nil }
             }
             // Folder selection shows that folder's embedding map (precedence-gated in ContentView so
-            // an active query/results always win); any other selection clears the viz.
-            if case .folder(let url) = sel { model.selectFolderForVisualization(url) }
-            else { model.selectFolderForVisualization(nil) }
+            // an active query/results always win); any other selection clears the viz. While in chat,
+            // picking a folder re-scopes the conversation to it instead of leaving chat.
+            if case .folder(let url) = sel {
+                model.selectFolderForVisualization(url)
+                if model.viewMode == .chat { model.chatWithFolder(url) }
+            } else { model.selectFolderForVisualization(nil) }
         }
         // Keep the highlight in sync with the ACTIVE query (text or file). When the active query no
         // longer matches the selected history row, drop the selection - otherwise the row stays

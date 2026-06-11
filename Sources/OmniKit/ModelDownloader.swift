@@ -64,22 +64,28 @@ public final class ModelDownloader: NSObject, URLSessionDownloadDelegate, @unche
 
     /// Download `variant` into `dest`. Existing complete files are skipped (resume-ish).
     public func download(variant: ModelVariant, to dest: URL, onProgress: @escaping @Sendable (Progress) -> Void) async throws {
-        let repo = Self.repo(for: variant)
+        try await download(repo: Self.repo(for: variant), files: Self.files, to: dest, onProgress: onProgress)
+    }
+
+    /// Generalized HF download: fetch `files` from `repo` into `dest`, reporting progress. Used by both
+    /// the embedding-model variants and the optional chat model. Existing complete files are skipped.
+    public func download(repo: String, files: [String], to dest: URL,
+                         onProgress: @escaping @Sendable (Progress) -> Void) async throws {
         let fm = FileManager.default
         try fm.createDirectory(at: dest, withIntermediateDirectories: true)
 
-        for (idx, rel) in Self.files.enumerated() {
+        for (idx, rel) in files.enumerated() {
             let fileURL = dest.appendingPathComponent(rel)
             try fm.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             if let size = try? fm.attributesOfItem(atPath: fileURL.path)[.size] as? Int64, size > 0 {
-                onProgress(Progress(file: rel, fileIndex: idx, fileCount: Self.files.count, received: size, total: size))
+                onProgress(Progress(file: rel, fileIndex: idx, fileCount: files.count, received: size, total: size))
                 continue
             }
             guard let url = URL(string: "https://huggingface.co/\(repo)/resolve/main/\(rel)") else {
                 throw OmniError.model("bad URL for \(rel)")
             }
             setProgressHandler { received, total in
-                onProgress(Progress(file: rel, fileIndex: idx, fileCount: Self.files.count, received: received, total: total))
+                onProgress(Progress(file: rel, fileIndex: idx, fileCount: files.count, received: received, total: total))
             }
             let tmp = try await downloadOne(url)
             try? fm.removeItem(at: fileURL)
