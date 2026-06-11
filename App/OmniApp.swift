@@ -56,6 +56,7 @@ struct OmniApp: App {
                 Picker("View", selection: Binding(get: { model.viewMode }, set: { model.viewMode = $0 })) {
                     Text("as Gallery").keyboardShortcut("1", modifiers: .command).tag(ResultViewMode.grid)
                     Text("as List").keyboardShortcut("2", modifiers: .command).tag(ResultViewMode.list)
+                    Text("as Chat").keyboardShortcut("3", modifiers: .command).tag(ResultViewMode.chat)
                 }
                 .pickerStyle(.inline)
                 .labelsHidden()

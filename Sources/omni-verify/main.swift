@@ -1682,6 +1682,156 @@ if args.count >= 4 && args[1] == "idxbreak" {
 }
 
 
+/// Thread-safe holder for the generation stats delivered from the stream's worker task.
+final class StatsBox: @unchecked Sendable {
+    private let l = NSLock(); private var v: ChatGenerationStats?
+    func set(_ s: ChatGenerationStats) { l.lock(); v = s; l.unlock() }
+    func get() -> ChatGenerationStats? { l.lock(); defer { l.unlock() }; return v }
+}
+
+// Chat streaming smoke: omni-verify chatgen <chatModelDir> ["question"] [temperature]
+// RAG context diagnostic: omni-verify chatrag <embedderModelDir> <dbPath> <folderPath|-> "question" [maxChars]
+// Runs the EXACT retrieval the chat uses against the app's live index and prints, per source, whether
+// full chunk text was re-derived or it fell back to the stored snippet (and a text preview). Shows
+// definitively whether the model receives real document text or just filenames/snippets.
+if args.count >= 5 && args[1] == "chatrag" {
+    let embedderDir = URL(fileURLWithPath: args[2])
+    let dbPath = args[3]
+    let folder: URL? = (args[4] == "-") ? nil : URL(fileURLWithPath: args[4])
+    let question = args.count >= 6 ? args[5] : "what is this about?"
+    let maxChars = args.count >= 7 ? (Int(args[6]) ?? 1800) : 1800
+
+    let engine = try await OmniEngine(modelDir: embedderDir)
+    let store = try VectorStore(dbURL: URL(fileURLWithPath: dbPath))
+    print("index: \(store.count) chunks, \(store.fileCount) files; folder=\(folder?.path ?? "(all)")  maxChars=\(maxChars)")
+    var settings = IndexSettings.default
+    settings.maxCharsPerChunk = maxChars
+
+    let qv = engine.embedQuery(question)
+    let ctx = ChatContextBuilder.build(question: question, queryVector: qv, store: store,
+                                       folder: folder, settings: settings)
+    print("\nQ: \(question)\nsources retrieved: \(ctx.sources.count)\n")
+    for s in ctx.sources {
+        let name = URL(fileURLWithPath: s.path).lastPathComponent
+        let preview = s.text.replacingOccurrences(of: "\n", with: " ").prefix(160)
+        print(String(format: "[%d] %@ %@  score=%.3f  %@  chars=%d",
+                     s.id, name, s.locator.isEmpty ? "" : "(\(s.locator))", s.score,
+                     s.isSnippetOnly ? "SNIPPET-ONLY" : "FULL-TEXT", s.text.count))
+        print("    \(preview)\n")
+    }
+    print("===== assembled user message the model receives =====")
+    print(ctx.userMessage)
+    exit(0)
+}
+
+// Exercises the full generate() path - prefill, sampling, streaming detokenization, stats - and prints
+// the streamed answer live. Not a parity gate; a quick "does it produce sane text" check.
+if args.count >= 3 && args[1] == "chatgen" {
+    let dir = URL(fileURLWithPath: args[2])
+    let question = args.count >= 4 ? args[3] : "In two sentences, what is a vector embedding?"
+    let temp = args.count >= 5 ? (Float(args[4]) ?? 0) : 0
+    let engine = ChatEngine(modelDir: dir, gpuCoordinator: nil)
+    try await engine.load()
+    var params = ChatGenerationParams()
+    params.temperature = temp
+    params.maxTokens = 200
+    params.seed = 42
+    let messages = [
+        ChatMessage(role: .system, content: "You are a helpful assistant. Be concise."),
+        ChatMessage(role: .user, content: question),
+    ]
+    print("Q: \(question)\nA: ", terminator: "")
+    let statsBox = StatsBox()
+    for try await chunk in engine.generate(messages: messages, params: params, onStats: { statsBox.set($0) }) {
+        FileHandle.standardOutput.write(Data(chunk.utf8))
+    }
+    print("")
+    if let s = statsBox.get() {
+        print(String(format: "[chatgen] prompt=%d tokens, generated=%d tokens, prefill %.0f ms, decode %.1f tok/s",
+                     s.promptTokens, s.generatedTokens, s.prefillSeconds * 1000, s.decodeTokensPerSecond))
+    }
+    exit(0)
+}
+
+// Chat-decode parity: omni-verify chatverify <chatModelDir> <chat_fixtures.json>
+// Validates the hand-rolled Qwen3-1.7B decoder against Python (mlx_lm) fixtures:
+//   1. template render equality (Swift ChatTemplate == reference prompt string)
+//   2. exact prompt token ids
+//   3. prefill last-position logits cosine >= 0.998. NOTE: the model is 4-bit and runs in bf16, so two
+//      independent implementations (this decoder vs Python mlx_lm) differ by a bf16-quantization noise
+//      floor of ~0.0014 on the 152k-wide logits even with identical kernels (verified: fused
+//      mx.fast.rms_norm and MTL_FAST_MATH=NO both leave the gap unchanged). That tail noise does NOT
+//      affect the argmax, which is why check 4 below is the PRIMARY correctness signal.
+//   4. greedy continuation exact, with a bf16 argmax-tie allowance: at the first divergence the
+//      check passes iff the reference top1-top2 logit gap there was < 1e-3 (a true tie under bf16).
+if args.count >= 2 && args[1] == "chatverify" {
+    guard args.count >= 4 else {
+        FileHandle.standardError.write(Data("usage: omni-verify chatverify <chatModelDir> <chat_fixtures.json>\n".utf8)); exit(2)
+    }
+    let dir = URL(fileURLWithPath: args[2])
+    let fxURL = URL(fileURLWithPath: args[3])
+    struct Msg: Decodable { let role: String; let content: String }
+    struct ChatFx: Decodable {
+        let messages: [Msg]; let prompt: String; let token_ids: [Int]
+        let prefill_logits: [Float]; let greedy_tokens: [Int]; let greedy_top2_gap: [Float]
+    }
+    let fx = try JSONDecoder().decode(ChatFx.self, from: try Data(contentsOf: fxURL))
+    let messages = fx.messages.map { ChatMessage(role: ChatMessage.Role(rawValue: $0.role)!, content: $0.content) }
+
+    print("loading chat model from \(dir.path) ...")
+    let tLoad = Date()
+    let engine = ChatEngine(modelDir: dir, gpuCoordinator: nil)
+    try await engine.load()
+    print(String(format: "loaded in %.1fs", -tLoad.timeIntervalSinceNow))
+
+    // 1. Template render equality.
+    let rendered = ChatTemplate.render(messages, addGenerationPrompt: true)
+    let tplOK = rendered == fx.prompt
+    print("[chatverify] template render: \(tplOK ? "MATCH" : "MISMATCH")")
+    if !tplOK {
+        print("  expected tail: \(String(fx.prompt.suffix(60)).debugDescription)")
+        print("  got tail:      \(String(rendered.suffix(60)).debugDescription)")
+    }
+
+    // 2. Exact prompt token ids.
+    let ids = try engine.promptTokenIds(messages: messages)
+    let idsOK = ids == fx.token_ids
+    print("[chatverify] prompt token ids: \(idsOK ? "MATCH" : "MISMATCH") (\(ids.count) vs \(fx.token_ids.count))")
+    if !idsOK {
+        let n = min(ids.count, fx.token_ids.count)
+        if let d = (0 ..< n).first(where: { ids[$0] != fx.token_ids[$0] }) {
+            print("  first diff at \(d): got \(ids[d]) expected \(fx.token_ids[d])")
+        }
+    }
+
+    // 3. Prefill logits cosine.
+    let tP = Date()
+    let logits = try engine.prefillLogits(tokenIds: fx.token_ids)
+    let prefillMs = -tP.timeIntervalSinceNow * 1000
+    let cos = cosine(logits, fx.prefill_logits)
+    let cosGate: Float = 0.998   // bf16 quantization noise floor (see header); greedy match is primary
+    print(String(format: "[chatverify] prefill logits cosine: %.6f  %@  (prefill %.0f ms)", cos, cos >= cosGate ? "OK" : "BAD", prefillMs))
+
+    // 4. Greedy continuation with the bf16 tie allowance.
+    let tD = Date()
+    let greedy = try engine.greedyContinuation(tokenIds: fx.token_ids, steps: fx.greedy_tokens.count)
+    let decodeMs = -tD.timeIntervalSinceNow * 1000
+    var greedyOK = true
+    var firstDiff = -1
+    for i in 0 ..< min(greedy.count, fx.greedy_tokens.count) where greedy[i] != fx.greedy_tokens[i] {
+        firstDiff = i
+        greedyOK = fx.greedy_top2_gap[i] < 1e-3   // a genuine bf16 argmax tie is acceptable
+        break
+    }
+    let tps = decodeMs > 0 ? Double(greedy.count) / (decodeMs / 1000) : 0
+    print(String(format: "[chatverify] greedy tokens: %@  first diff=%d  (%.0f tok/s decode)",
+                 greedyOK ? "MATCH" : "MISMATCH", firstDiff, tps))
+
+    let pass = tplOK && idsOK && cos >= cosGate && greedyOK
+    print("=== chatverify: \(pass ? "PASS" : "FAIL") ===")
+    exit(pass ? 0 : 1)
+}
+
 guard args.count >= 3 else {
     FileHandle.standardError.write(Data("usage: omni-verify <modelDir> <text_fixtures.json>\n".utf8))
     exit(2)

@@ -12,7 +12,8 @@ let package = Package(
         .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.31.3"),
         // Rust-backed tokenizer (HF `tokenizers` crate), ~6.5x faster than swift-transformers'
         // pure-Swift BPE. Loads the same tokenizer.json, so token ids stay identical (parity).
-        .package(url: "https://github.com/DePasqualeOrg/swift-tokenizers", from: "0.5.0"),
+        // 0.7.0 adds StreamingDetokenizer (UTF-8-safe incremental decode for chat generation).
+        .package(url: "https://github.com/DePasqualeOrg/swift-tokenizers", from: "0.7.0"),
     ],
     targets: [
         .target(

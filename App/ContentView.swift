@@ -16,6 +16,8 @@ struct ContentView: View {
     /// filters, clear a file query if real text was typed, and schedule the (debounced) search. The
     /// box binds to the RAW typed string; `set` (user edits only) routes here.
     private func handleQueryEdit(_ raw: String) {
+        // Typing a search while in chat returns to the results view so the matches are visible.
+        if model.viewMode == .chat, !raw.trimmingCharacters(in: .whitespaces).isEmpty { model.exitChat() }
         model.applyParsedQuery(raw)
         model.suggestionsAllowed = true   // this fires only on real keystrokes (the .searchable set:), so arm the dropdown
         if !model.query.isEmpty, model.fileQuery != nil { model.fileQuery = nil; model.queryError = nil }
@@ -108,6 +110,14 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var content: some View {
+        if model.viewMode == .chat {
+            ChatPane()
+        } else {
+            searchContent
+        }
+    }
+
+    @ViewBuilder private var searchContent: some View {
         VStack(spacing: 0) {
             if let fq = model.fileQuery { FileQueryChip(fileQuery: fq) }
             else if !model.activeQualifiers.isEmpty || model.literalQuery { QualifierBar() }

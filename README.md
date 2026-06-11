@@ -19,6 +19,12 @@ on Apple GPUs via a native MLX-Swift port of `jina-embeddings-v5-omni`, in two s
 Python, no server, no cloud: the model downloads once, then indexing and search run with
 no network at all. Airgap the Mac and Omni keeps working.
 
+You can also **chat with a folder**: ask questions in natural language and get answers grounded
+in your indexed files, with clickable citations back to the sources. The chat runs a local
+Qwen3-1.7B model (an optional ~1 GB download) on the same on-device MLX runtime, so it stays
+private and works offline too. See [`Docs/llm-inference.md`](Docs/llm-inference.md) for how the
+local LLM is built and verified.
+
 <p align="center">
   <a href="https://hanxiao.io/omni/assets/omni-intro.mp4" title="Watch the Omni demo (37 seconds)">
     <img src="site/omni/assets/omni-poster-play.jpg" alt="Watch the Omni demo: search by meaning, any file to any file, deep PDF search, folder maps, and the on-device MLX architecture" width="720">

@@ -3,7 +3,7 @@ import SwiftUI
 import AppKit
 import OmniKit
 
-enum ResultViewMode: String, CaseIterable { case list, grid }
+enum ResultViewMode: String, CaseIterable { case list, grid, chat }
 
 /// The only indexing states the user sees: idle, indexing, paused.
 enum IndexState { case idle, indexing, paused }
@@ -234,6 +234,18 @@ final class AppModel {
 
     func openSelected() { if let u = selectedURL { NSWorkspace.shared.openAsync(u) } }
     func revealSelected() { if let u = selectedURL { NSWorkspace.shared.revealAsync(u) } }
+
+    /// Enter chat scoped to `folder` (nil = all indexed files). The chat pane reads `filterFolder`
+    /// as its scope, so we set it here; the view returns to the folder map / results on exit.
+    func chatWithFolder(_ folder: URL?) {
+        suppressFilterEffects = true         // entering chat should not kick off a results search
+        filterFolder = folder
+        suppressFilterEffects = false
+        viewMode = .chat
+    }
+
+    /// Leave chat, back to the normal results / folder-map view.
+    func exitChat() { if viewMode == .chat { viewMode = .list } }
     /// Finder-style toggle: dismiss the preview if open, else preview the current selection.
     func toggleQuickLook() { previewURL = previewURL != nil ? nil : selectedURL }
 
@@ -476,6 +488,14 @@ final class AppModel {
     /// attach(), which also auto-starts the server when the user had it enabled last session. The
     /// engine/store stay private - attach() is the only seam the serving layer sees.
     let serving = ServingController()
+
+    /// Owns the optional "chat with your folder" feature (local LLM + RAG). Constructed eagerly so the
+    /// UI can read its state; the embedder and store are handed to it in bootstrap via attach(), the
+    /// same seam serving uses (the engine/store stay private).
+    let chat = ChatModel()
+
+    /// Files currently in the index (for the chat "nothing indexed" empty state).
+    var indexedFileCount: Int { store?.fileCount ?? 0 }
 
     init() {
         loadRoots()
@@ -1226,6 +1246,7 @@ final class AppModel {
 
     private func applyMemoryLimit() {
         omniSetMemoryLimit(maxMemoryGB > 0 ? Int(maxMemoryGB * 1_000_000_000) : 0)
+        chat.unloadIfOverCap(capGB: maxMemoryGB)   // chat needs headroom; unload under a tight cap
     }
 
     /// Switch model variant (small/nano). Reloads the engine; the index is flagged
@@ -1327,6 +1348,8 @@ final class AppModel {
             // session, and on a variant switch (bootstrap reruns) it replaces the backend under
             // any in-flight server. modelName is reported by /health and /v1/models.
             self.serving.attach(engine: engine, store: store, modelName: "omni-\(modelVariant.rawValue)")
+            self.chat.attach(engine: engine, store: store)
+            self.chat.memoryCapGB = self.maxMemoryGB
             if let oldStore { Task.detached(priority: .utility) { _ = oldIndexer; oldStore.close() } }
             self.supportsImages = engine.supportsImages
             self.audioSupported = engine.supportsAudio
