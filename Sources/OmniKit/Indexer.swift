@@ -131,8 +131,10 @@ public final class Indexer: @unchecked Sendable {
     // There is deliberately NO per-file chunk-count cap: the only bound on text coverage is
     // FileExtractor.maxTextBytes (the extraction read itself). A 40-chunk cap here used to
     // silently truncate long documents to ~64KB while claiming a 2MB read limit.
-    public var chunkOverlap = TextChunker.overlap
-    public var snippetLength = TextChunker.snippetLength
+    // Read-only: chunking is delegated to the shared TextChunker (the chat RAG builder re-derives
+    // chunks with it, so these must never diverge from its constants).
+    public var chunkOverlap: Int { TextChunker.overlap }
+    public var snippetLength: Int { TextChunker.snippetLength }
     // Pages of a scanned PDF rasterized + patchified per streamed group in the embed stage.
     // Bounds host RAM (a page's raw patches are ~40MB at the default 1568px), NOT total pages -
     // any page count gets indexed, group by group, with the next group prefetched off-thread.

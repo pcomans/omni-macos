@@ -194,6 +194,7 @@ final class ChatModel {
     }
 
     func deleteModel() {
+        guard !isGenerating else { return }   // never unload/delete under an active generation
         chatEngine?.unload()
         chatEngine = nil
         try? ChatModelLocator.delete()

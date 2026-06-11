@@ -13,7 +13,7 @@ struct ChatTab: View {
             } header: {
                 Text("Local chat model")
             } footer: {
-                Text("Chat answers questions about your indexed files using Qwen3-1.7B running on your Mac (about 1 GB download, ~1 GB memory while loaded, plus up to ~0.5 GB while answering). It is optional; search works without it. Requires the memory limit at 4 GB or higher.")
+                Text("Chat answers questions about your indexed files using Qwen3-1.7B running on your Mac (about 1 GB download, ~1 GB memory while loaded, plus up to ~0.9 GB while answering). It is optional; search works without it. Requires the memory limit at 4 GB or higher.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -70,7 +70,7 @@ struct ChatTab: View {
                 Label(chat.modelState == .ready ? "Installed (loaded)" : "Installed",
                       systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                 Spacer()
-                Button("Remove") { chat.deleteModel() }
+                Button("Remove") { chat.deleteModel() }.disabled(chat.isGenerating)
             }
         case .failed(let msg):
             VStack(alignment: .leading, spacing: 6) {

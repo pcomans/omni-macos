@@ -30,8 +30,8 @@ import MLX
 /// ----------------------
 /// Each cached token costs, across all layers:
 ///     2 (K and V) * numLayers * numKVHeads * headDim * bytesPerElement
-/// For Qwen3-1.7B in bf16 that is 2 * 28 * 8 * 128 * 2 = 114,688 bytes ~= 112 KiB per token, so a
-/// full 4096-token context is ~448 MiB. We grow the backing buffer in fixed-size slabs (rather than
+/// For Qwen3-1.7B in bf16 that is 2 * 28 * 8 * 128 * 2 = 114,688 bytes ~= 112 KiB per token, so the
+/// full 8192-token context cap is ~896 MiB. We grow the backing buffer in fixed-size slabs (rather than
 /// reallocating on every token) to keep allocation churn down; `offset` tracks how many positions are
 /// actually valid, and doubles as the RoPE position for the next token.
 final class KVCache {

@@ -206,7 +206,9 @@ public final class ChatEngine: @unchecked Sendable {
     }
 
     /// Drop oldest non-system messages until the rendered prompt fits in the context window with room
-    /// for `reserve` output tokens.
+    /// for `reserve` output tokens. Last resort, this can drop the newest user message too; that is
+    /// unreachable today because ChatContextBuilder's charBudget (12k chars, ~3-4k tokens) keeps a
+    /// single RAG turn well under the post-reserve budget - keep those two bounds in step.
     private func trimToContext(_ messages: [ChatMessage], tokenizer: any Tokenizer,
                                cfg: ChatConfig, reserve: Int) -> [ChatMessage] {
         let budget = max(256, cfg.maxContextTokens - reserve)

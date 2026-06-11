@@ -109,7 +109,7 @@ So we remember each layer's K and V (`KVCache.swift`). Then:
 
 That turns each step into one forward pass over a single token: `O(t)` math, but crucially one pass
 instead of `t`. The cache costs `2 * numLayers * numKVHeads * headDim * bytes` per token; for this model
-in bf16 that is ~112 KiB/token, so the 4096-token context cap is ~448 MiB. The buffer grows in 256-token
+in bf16 that is ~112 KiB/token, so the 8192-token context cap is ~896 MiB. The buffer grows in 256-token
 slabs to avoid reallocating every step, and `offset` (the number of valid positions) doubles as the
 RoPE position for the next token.
 

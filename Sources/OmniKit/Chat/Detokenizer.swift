@@ -20,6 +20,12 @@ import Tokenizers
 /// character. swift-tokenizers ships exactly this as `StreamingDetokenizer`, so we wrap it rather
 /// than re-derive the byte bookkeeping; this type exists to give the rest of OmniKit a small, stable
 /// surface and to host this explanation.
+///
+/// KNOWN LIMITATION - no end-of-stream flush
+/// -----------------------------------------
+/// `StreamingDetokenizer` exposes no finalize API, so bytes still held back when generation stops are
+/// dropped. That only loses text when generation is cut off mid-character (a `maxTokens` truncation
+/// landing inside a multi-byte sequence); a normal stop-token ending always follows complete text.
 final class Detokenizer {
     private let inner: StreamingDetokenizer
 

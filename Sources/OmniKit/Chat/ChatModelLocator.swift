@@ -22,13 +22,10 @@ public enum ChatModelLocator {
         return appSup.appendingPathComponent("Omni/\(installFolderName)")
     }
 
-    /// True when a complete model (safetensors + config + tokenizer) is present at `dir`.
+    /// True when every file the runtime needs (`files`) is present at `dir`.
     static func isComplete(_ dir: URL) -> Bool {
         let fm = FileManager.default
-        for f in ["model.safetensors", "config.json", "tokenizer.json"] {
-            if !fm.fileExists(atPath: dir.appendingPathComponent(f).path) { return false }
-        }
-        return true
+        return files.allSatisfy { fm.fileExists(atPath: dir.appendingPathComponent($0).path) }
     }
 
     /// First complete model directory in priority order, or nil if the chat model is not installed.

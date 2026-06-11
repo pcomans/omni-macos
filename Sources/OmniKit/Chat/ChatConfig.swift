@@ -44,8 +44,9 @@ public struct ChatConfig: Sendable {
     public var quantGroupSize = 128
     public var quantBits = 4
 
-    /// Stop tokens: `<|im_end|>` ends an assistant turn; `<|endoftext|>` is a safety stop.
-    public var eosTokenIds: [Int] = [151645, 151643]
+    /// Stop tokens (`<|im_end|>` ends an assistant turn; `<|endoftext|>` is a safety stop), defined
+    /// once on ``ChatTemplate`` next to the markers they pair with.
+    public var eosTokenIds: [Int] = ChatTemplate.stopTokenIds
 
     /// App-imposed context cap (NOT the model's 65536 limit). Bounds the KV cache memory and the
     /// prompt length we will accept. The KV cache grows on demand in slabs, so this is just a ceiling,
