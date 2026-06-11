@@ -1,0 +1,1583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>How Omni runs a language model - an interactive tour of inference</title>
+  <meta name="description" content="An interactive walkthrough of LLM inference in Omni: tokens, 4-bit weights, the transformer step, the KV cache, sampling, streaming, and RAG - with the app's real Swift code and real model numbers." />
+  <meta name="theme-color" content="#f9fafc" />
+  <link rel="icon" href="assets/icon.png" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" />
+  <style>
+:root {
+  --bg: #f9fafc;
+  --panel: #ffffff;
+  --ink: #1c2330;
+  --muted: #5b6472;
+  --faint: #98a1ae;
+  --line: #e3e7ee;
+  --accent: #fdba74;
+  --accent-soft: #fff3e4;
+  --accent-fg: #7c2d12;
+  --ok: #15803d;
+  --ok-soft: #e8f6ec;
+  --bad: #b91c1c;
+  --bad-soft: #fdebeb;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: var(--font-sans); font-size: 16px; line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+.mono { font-family: var(--font-mono); }
+a { color: var(--accent-fg); text-decoration: none; border-bottom: 1px solid var(--accent); }
+a:hover { background: var(--accent); }
+main { max-width: 920px; margin: 0 auto; padding: 0 24px 120px; }
+
+/* nav */
+nav {
+  position: sticky; top: 0; z-index: 50; background: rgba(249,250,252,.92);
+  backdrop-filter: blur(8px); border-bottom: 1px solid var(--line);
+}
+nav .inner { max-width: 920px; margin: 0 auto; padding: 10px 24px; display: flex; gap: 6px; align-items: center; overflow-x: auto; white-space: nowrap; }
+nav .brand { font-family: var(--font-mono); font-size: 13px; font-weight: 600; margin-right: 10px; border: none; }
+nav a.sec { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); border: 1px solid transparent; border-radius: 5px; padding: 3px 7px; }
+nav a.sec:hover { background: var(--accent-soft); color: var(--accent-fg); border-color: var(--accent); }
+
+/* hero */
+header.hero { padding: 64px 0 28px; }
+.hero h1 { font-size: 34px; line-height: 1.2; margin: 0 0 14px; letter-spacing: -.02em; }
+.hero p.sub { font-size: 18px; color: var(--muted); max-width: 46em; margin: 0 0 8px; }
+.kicker { font-family: var(--font-mono); font-size: 12px; color: var(--accent-fg); background: var(--accent-soft); border: 1px solid var(--accent); display: inline-block; padding: 2px 9px; border-radius: 999px; margin-bottom: 18px; }
+
+/* sections */
+section { margin-top: 72px; }
+section > h2 { font-size: 24px; letter-spacing: -.01em; margin: 0 0 4px; }
+section > h2 .num { font-family: var(--font-mono); font-size: 13px; color: var(--faint); display: block; margin-bottom: 6px; }
+section p { max-width: 46em; }
+section h3 { font-size: 17px; margin: 28px 0 8px; }
+.filetag { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); }
+.filetag b { color: var(--ink); font-weight: 600; }
+
+/* code */
+pre.code {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 14px 16px; overflow-x: auto; font-size: 12.5px; line-height: 1.55; margin: 10px 0 4px;
+}
+pre.code code.hljs { background: transparent; padding: 0; font-family: var(--font-mono); }
+.codecap { font-family: var(--font-mono); font-size: 11px; color: var(--faint); margin: 2px 2px 18px; }
+details.fullfile { margin: 8px 0 18px; }
+details.fullfile > summary {
+  cursor: pointer; font-family: var(--font-mono); font-size: 12px; color: var(--accent-fg);
+  background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 6px;
+  display: inline-block; padding: 4px 10px; user-select: none;
+}
+details.fullfile[open] > summary { border-radius: 6px 6px 0 0; }
+
+/* demo panels */
+.demo {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 18px 20px; margin: 18px 0 26px;
+}
+.demo .dtitle { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); margin-bottom: 12px; }
+.demo .dtitle::before { content: "interactive "; color: var(--accent-fg); }
+.row { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+button.btn {
+  font-family: var(--font-mono); font-size: 12.5px; color: var(--ink);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  padding: 6px 12px; cursor: pointer;
+}
+button.btn:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-fg); }
+button.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
+input[type=range] { accent-color: #f59e0b; }
+.readout { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); }
+.readout b { color: var(--ink); }
+label.ctl { font-family: var(--font-mono); font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+
+/* token chips */
+.tokens { line-height: 2.2; }
+.tok {
+  display: inline-block; font-family: var(--font-mono); font-size: 12.5px; white-space: pre;
+  border-radius: 4px; padding: 1px 4px; margin: 0 1px; border: 1px solid rgba(0,0,0,.07);
+  cursor: default; position: relative;
+}
+.tok:hover::after {
+  content: "id " attr(data-id); position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: calc(100% + 4px); background: var(--ink); color: #fff; font-size: 10.5px;
+  padding: 1px 7px; border-radius: 4px; white-space: nowrap; z-index: 5;
+}
+.t0 { background: #fde9d6; } .t1 { background: #def3e0; } .t2 { background: #dcebfb; }
+.t3 { background: #f3e3f6; } .t4 { background: #f6f0d8; }
+.tok.special { background: var(--ink); color: #ffd9a8; border-color: var(--ink); }
+.tok.held { background: var(--bad-soft); color: var(--bad); border-style: dashed; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.tabs button.btn.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+
+/* template render */
+pre.chatml {
+  font-family: var(--font-mono); font-size: 13px; line-height: 1.7; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; white-space: pre-wrap; word-break: break-word; margin: 0;
+}
+.mk  { background: var(--ink); color: #ffd9a8; border-radius: 4px; padding: 0 4px; }
+.rl  { color: var(--accent-fg); font-weight: 700; }
+.tk  { background: #f3e3f6; border-radius: 4px; padding: 0 4px; }
+
+/* bars */
+.bars { display: grid; grid-template-columns: max-content 1fr max-content; gap: 4px 10px; align-items: center; font-family: var(--font-mono); font-size: 12px; }
+.bars .lbl { white-space: pre; color: var(--ink); }
+.bars .bar { height: 14px; border-radius: 3px; background: var(--accent); min-width: 1px; transition: width .15s; }
+.bars .bar.out { background: #d7dbe2; }
+.bars .pct { color: var(--muted); }
+
+/* grids for mask demo */
+.maskwrap { overflow-x: auto; }
+table.mask { border-collapse: collapse; font-family: var(--font-mono); font-size: 10.5px; }
+table.mask td, table.mask th { width: 26px; height: 26px; text-align: center; border: 1px solid var(--line); color: var(--faint); font-weight: 400; }
+table.mask td.ok { background: var(--accent-soft); color: var(--accent-fg); }
+table.mask td.no { background: #f2f4f7; color: #c3c9d2; }
+table.mask td.new { outline: 2px solid var(--accent-fg); outline-offset: -2px; }
+
+/* quant table */
+table.q { border-collapse: collapse; font-family: var(--font-mono); font-size: 12px; width: 100%; }
+table.q th { text-align: left; color: var(--faint); font-weight: 500; border-bottom: 1px solid var(--line); padding: 4px 10px 4px 0; }
+table.q td { padding: 4px 10px 4px 0; border-bottom: 1px solid #f0f2f6; }
+table.q td.num { font-variant-numeric: tabular-nums; }
+.nib { display: inline-block; min-width: 26px; text-align: center; background: var(--ink); color: #ffd9a8; border-radius: 4px; padding: 0 4px; }
+
+/* memory bars */
+.membars div { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-family: var(--font-mono); font-size: 12px; }
+.membars .mb { height: 18px; border-radius: 4px; background: #d7dbe2; }
+.membars .mb.hot { background: var(--accent); }
+
+/* stream demo */
+.streamcols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.streamcols h4 { font-size: 13px; font-family: var(--font-mono); color: var(--muted); margin: 0 0 8px; font-weight: 500; }
+.streamout { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; min-height: 54px; padding: 10px 12px; font-size: 16px; }
+@media (max-width: 640px) { .streamcols { grid-template-columns: 1fr; } }
+
+/* chat replay */
+.chatreplay { max-width: 560px; }
+.bubble-q { background: #eef1f5; border-radius: 12px; padding: 8px 14px; display: inline-block; margin-bottom: 12px; }
+.bubble-a { font-size: 16px; min-height: 28px; }
+.cursor { display: inline-block; width: 8px; height: 17px; background: var(--accent-fg); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.chip { display: inline-block; font-family: var(--font-mono); font-size: 11.5px; background: #eef1f5; border-radius: 999px; padding: 2px 10px; margin-top: 10px; }
+
+/* pipeline */
+.pipe { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 22px 0; }
+.pipe a.step {
+  font-family: var(--font-mono); font-size: 12px; border: 1px solid var(--line); background: var(--panel);
+  border-radius: 8px; padding: 8px 12px; color: var(--ink); border-bottom-width: 1px;
+}
+.pipe a.step:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-fg); }
+.pipe .arrow { color: var(--faint); font-family: var(--font-mono); font-size: 12px; }
+.pipe .loop { color: var(--accent-fg); font-family: var(--font-mono); font-size: 11px; }
+
+/* two path cards */
+.paths { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 24px 0; }
+@media (max-width: 700px) { .paths { grid-template-columns: 1fr; } }
+.path { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.path h3 { margin: 0 0 6px; font-size: 15px; }
+.path p { font-size: 14px; color: var(--muted); margin: 0 0 8px; }
+.path .flow { font-family: var(--font-mono); font-size: 11.5px; color: var(--accent-fg); }
+
+/* gpu tiers */
+.tiers .tier { display: flex; gap: 12px; align-items: baseline; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 10px 14px; margin: 8px 0; }
+.tiers .tname { font-family: var(--font-mono); font-size: 12.5px; font-weight: 700; min-width: 56px; }
+.tiers .tdesc { font-size: 13.5px; color: var(--muted); }
+
+/* terminal */
+pre.term { background: #1c2330; color: #d6dde8; border-radius: 8px; padding: 14px 16px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; overflow-x: auto; }
+pre.term .ok { color: #7ee2a8; } pre.term .dim { color: #8a94a6; }
+
+/* canvas */
+canvas#cosine { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; touch-action: none; cursor: grab; max-width: 100%; }
+
+/* footer table */
+table.files { border-collapse: collapse; font-size: 13.5px; width: 100%; }
+table.files th { text-align: left; font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); font-weight: 500; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--line); }
+table.files td { padding: 6px 12px 6px 0; border-bottom: 1px solid #f0f2f6; vertical-align: top; }
+table.files td.f { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
+footer { margin-top: 90px; padding-top: 24px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px; }
+.note { font-size: 13.5px; color: var(--muted); background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 8px; padding: 10px 14px; max-width: 46em; }
+  </style>
+</head>
+<body>
+
+<nav><div class="inner">
+  <a class="brand" href="./">Omni</a>
+  <a class="sec" href="#paths">01 two paths</a>
+  <a class="sec" href="#vectors">02 vectors</a>
+  <a class="sec" href="#loop">03 the loop</a>
+  <a class="sec" href="#tokens">04 tokens</a>
+  <a class="sec" href="#template">05 template</a>
+  <a class="sec" href="#quant">06 4-bit</a>
+  <a class="sec" href="#block">07 transformer</a>
+  <a class="sec" href="#kv">08 kv cache</a>
+  <a class="sec" href="#sampling">09 sampling</a>
+  <a class="sec" href="#streaming">10 streaming</a>
+  <a class="sec" href="#rag">11 rag</a>
+  <a class="sec" href="#gpu">12 one gpu</a>
+  <a class="sec" href="#verify">13 verify</a>
+</div></nav>
+
+<main>
+
+<header class="hero">
+  <div class="kicker">interactive walkthrough</div>
+  <h1>How Omni runs a language model on your Mac</h1>
+  <p class="sub">Omni answers questions about your files with a neural network that runs entirely on your Apple silicon GPU. This page walks the whole path a question travels, from keystrokes to a streamed, cited answer, using the app's real Swift source and real numbers recorded from the real model. No background in machine learning needed.</p>
+  <p class="sub mono" style="font-size:13px">Every demo below is live: drag the sliders, click the buttons.</p>
+</header>
+
+<section id="paths">
+  <h2><span class="num">01</span>One network, two ways to run it</h2>
+  <p>"Inference" just means running a trained neural network forward: numbers in, numbers out. A network is a long list of learned numbers (the <b>weights</b>) plus a fixed recipe for combining them with your input (the <b>forward pass</b>). Training found the weights; inference only reads them. Omni does inference in two different ways, and they share the same transformer architecture, Qwen3:</p>
+  <div class="paths">
+    <div class="path">
+      <h3>The embedder (search)</h3>
+      <p>Runs the network <b>once</b> per text or image and keeps its internal summary: one list of 1,024 numbers, a <b>vector</b>. Similar meanings land near each other, so search is just "which stored vectors point the same way as the query's vector".</p>
+      <div class="flow">file &rarr; tokens &rarr; transformer &times;1 &rarr; vector</div>
+    </div>
+    <div class="path">
+      <h3>The chat model (generation)</h3>
+      <p>Runs the network <b>in a loop</b>. Each pass ends with a score for every word-piece in a 152k vocabulary: "how plausible is this as the next piece". Pick one, append it, run again. Text falls out one piece at a time.</p>
+      <div class="flow">prompt &rarr; transformer &times;N &rarr; one token each &rarr; answer</div>
+    </div>
+  </div>
+  <p>The embedding side (<span class="mono">Qwen3Backbone.swift</span>, <span class="mono">OmniTextEncoder.swift</span>, <span class="mono">WeightStore.swift</span>) was hand-written by Han Xiao and verified against the Python reference model. The chat side (<span class="mono">Sources/OmniKit/Chat/</span>) reuses that exact architecture and adds the three things generation needs: 4-bit weights, a KV cache, and a sampler. Both appear below.</p>
+</section>
+
+<section id="vectors">
+  <h2><span class="num">02</span>Path one: files become vectors</h2>
+  <p>When Omni indexes a file, the embedder turns its text into a vector. The whole trick of semantic search is that "vector" is not a metaphor: it is literally a direction in space, and the model was trained so that texts that mean similar things point in similar directions. Two directions are compared with <b>cosine similarity</b>: 1.0 means same direction, 0 means unrelated, negative means opposed.</p>
+
+  <div class="demo">
+    <div class="dtitle">cosine similarity</div>
+    <p style="margin-top:0;font-size:14px">Drag the tips of the two arrows. Real embeddings live in 1,024 dimensions, not 2, but the math is identical: it only measures the angle.</p>
+    <div class="row" style="align-items:flex-start">
+      <canvas id="cosine" width="320" height="320"></canvas>
+      <div style="flex:1;min-width:200px">
+        <div class="readout" style="font-size:14px">cos(query, document) = <b id="cosval" style="font-size:20px">0.97</b></div>
+        <div id="cosverdict" class="readout" style="margin-top:6px"></div>
+        <p style="font-size:13px;color:var(--muted);margin-top:14px">Omni's search is exactly this comparison between your query's vector and every indexed chunk's stored vector. The highest cosines are the results list.</p>
+      </div>
+    </div>
+  </div>
+
+  <p>Here is the entire encode path, from Han Xiao's <span class="mono">OmniTextEncoder.swift</span>. Tokenize, run the transformer once, then "pool": take the hidden state at the last token (a causal model packs its summary of everything it read into the last position) and scale it to length 1.</p>
+  <pre class="code"><code class="language-swift">    /// Encode a single string to an L2-normalized embedding (optionally Matryoshka-truncated).
+    public func encode(_ text: String, as type: OmniInputType, truncateDim: Int? = nil) -&gt; [Float] {
+        let ids = tokenIds(text, type)
+        lastSequenceLength = ids.count
+        let embeds = backbone.embed(ids)
+        let hidden = backbone.forward(inputsEmbeds: embeds, length: ids.count)
+        return backbone.pool(hidden, length: ids.count, truncateDim: truncateDim)
+    }</code></pre>
+  <div class="codecap">Sources/OmniKit/OmniTextEncoder.swift (Han Xiao)</div>
+
+  <p>The transformer itself is a loop over 28 identical blocks. Keep this shape in mind; the chat decoder in section 07 is the same loop:</p>
+  <pre class="code"><code class="language-swift">    /// Run the transformer over precomputed embeddings -&gt; hidden after final norm [B, L, dim].
+    /// `lengths` (batched, right-padded) is used to build the bidirectional padding mask for
+    /// Nano; pass nil for a single sequence.
+    func forward(inputsEmbeds: MLXArray, length L: Int, lengths: [Int]? = nil) -&gt; MLXArray {
+        let mask = attentionMask(inputsEmbeds, lengths: lengths)
+        var h = inputsEmbeds.asType(computeDType)
+        if useCompiledBlock {
+            h = forwardCompiled(h, mask: mask)
+        } else {
+            for i in 0 ..&lt; cfg.text.numLayers {
+                let p = &quot;language_model.layers.\(i).&quot;
+                h = h + attention(rmsNorm(h, p + &quot;input_layernorm.weight&quot;), p, mask: mask)
+                h = h + mlp(rmsNorm(h, p + &quot;post_attention_layernorm.weight&quot;), p)
+            }
+        }
+        return rmsNorm(h, &quot;language_model.norm.weight&quot;)
+    }</code></pre>
+  <div class="codecap">Sources/OmniKit/Qwen3Backbone.swift (Han Xiao) - the eager per-layer loop</div>
+
+  <p>And the pooling step, where 28 layers of computation collapse into the one vector that gets stored in the index:</p>
+  <pre class="code"><code class="language-swift">    /// Graph-only last-token pool (fp32, L2-normalized, UNEVALUATED). Lets a caller build several
+    /// sequences&#x27; pools and evaluate them in ONE eval instead of one GPU drain per sequence.
+    func poolGraph(_ hidden: MLXArray, length L: Int) -&gt; MLXArray {
+        let pooled = hidden[0, L - 1].asType(.float32)
+        return pooled / MLX.sqrt((pooled * pooled).sum())
+    }</code></pre>
+  <div class="codecap">Sources/OmniKit/Qwen3Backbone.swift (Han Xiao)</div>
+
+  <p>One more embedder-only idea: the checkpoint ships a <b>LoRA adapter</b>, a small low-rank "diff" that specializes the general model for retrieval. Instead of applying it on every forward pass, <span class="mono">WeightStore</span> merges it into the weights once at load time, so inference afterwards is just the plain network:</p>
+  <pre class="code"><code class="language-swift">        // Merge the retrieval LoRA adapter into the backbone (in fp32).
+        for (key, aArr) in adapter where key.contains(&quot;lora_A&quot;) {
+            let baseKey = key
+                .replacingOccurrences(of: &quot;base_model.model.&quot;, with: &quot;&quot;)
+                .replacingOccurrences(of: &quot;.lora_A.weight&quot;, with: &quot;.weight&quot;)
+            let bKey = key.replacingOccurrences(of: &quot;lora_A&quot;, with: &quot;lora_B&quot;)
+            guard let bArr = adapter[bKey], let base = w[baseKey] else { continue }
+            let a = aArr.asType(.float32)        // [r, in]
+            let b = bArr.asType(.float32)         // [out, r]
+            let delta = matmul(b, a)              // [out, in]
+            w[baseKey] = base + (loraScale * delta)
+        }</code></pre>
+  <div class="codecap">Sources/OmniKit/WeightStore.swift (Han Xiao) - W += (alpha/r) &middot; B&middot;A, merged once at load</div>
+</section>
+
+<section id="loop">
+  <h2><span class="num">03</span>Path two: generation is a loop</h2>
+  <p>A chat model is a function from "the conversation so far" to "a probability for every possible next token". You sample one token, append it, and ask again, until the model emits a stop token. Everything else on this page is about making one turn of that loop fast and the text that falls out of it clean.</p>
+  <div class="pipe">
+    <a class="step" href="#template">render template</a><span class="arrow">&rarr;</span>
+    <a class="step" href="#tokens">tokenize</a><span class="arrow">&rarr;</span>
+    <a class="step" href="#kv">prefill</a><span class="arrow">&rarr;</span>
+    <a class="step" href="#sampling">sample</a><span class="arrow">&rarr;</span>
+    <a class="step" href="#streaming">detokenize</a><span class="arrow">&rarr;</span>
+    <a class="step" href="#kv">decode step</a>
+    <span class="loop">&#8617; back to sample, until a stop token</span>
+  </div>
+  <p><span class="mono">ChatEngine.swift</span> orchestrates the loop. Here is its core, prefill plus the decode loop; each named piece gets its own section below:</p>
+  <pre class="code"><code class="language-swift">        // Prefill: one gate acquisition for the whole prompt.
+        let prefillStart = Date()
+        var logits = gate { () -&gt; [Float] in
+            let l = decoder.prefill(promptIds, cache: cache)
+            eval(l)
+            return l.asArray(Float.self)
+        }
+        let prefillSeconds = -prefillStart.timeIntervalSinceNow
+
+        // NaN insurance: a cold MLX device has very rarely produced a non-finite first forward
+        // (observed on the embedder). Reload once and retry before giving up.
+        if !logits.allSatisfy({ $0.isFinite }) {
+            reloadWeights()
+            cache = self.decoder?.makeCache() ?? cache
+            logits = gate { () -&gt; [Float] in
+                let l = (self.decoder ?? decoder).prefill(promptIds, cache: cache)
+                eval(l)
+                return l.asArray(Float.self)
+            }
+        }
+
+        let liveDecoder = self.decoder ?? decoder
+        let decodeStart = Date()
+        var generated = 0
+        var token = sampler.sample(logits)
+        while generated &lt; params.maxTokens {
+            if cancelled.isSet || Task.isCancelled { break }
+            if cfg.eosTokenIds.contains(token) { break }
+            if let chunk = try detok.consume(token) { continuation.yield(chunk) }
+            generated += 1
+            if generated &gt;= params.maxTokens { break }
+
+            // One decode step = one gate acquisition; search can preempt between tokens.
+            let host = gate { () -&gt; [Float] in
+                let l = liveDecoder.step(token, cache: cache)
+                eval(l)
+                return l.asArray(Float.self)
+            }
+            token = sampler.sample(host)   // sample on the CPU, outside the gate
+        }</code></pre>
+  <div class="codecap">Sources/OmniKit/Chat/ChatEngine.swift - the generation loop</div>
+</section>
+
+<section id="tokens">
+  <h2><span class="num">04</span>Tokens: the model never sees text</h2>
+  <p>Models work on integers. A <b>tokenizer</b> chops text into pieces from a fixed vocabulary (151,936 entries for Qwen3) and replaces each piece with its id. Common words are one piece; rare words split into several. The pieces below are the real output of Qwen3's tokenizer for each sample (hover any piece for its id):</p>
+
+  <div class="demo">
+    <div class="dtitle">real Qwen3 tokenization</div>
+    <div class="tabs" id="toktabs"></div>
+    <div class="tokens" id="tokout"></div>
+    <div class="readout" id="tokcount" style="margin-top:10px"></div>
+  </div>
+
+  <p>Two things to notice. Most tokens <i>start with the space before the word</i>; the space belongs to the token. And Qwen3's pieces are chunks of UTF-8 <b>bytes</b>, not characters, which is why streaming text out needs care (section 10).</p>
+</section>
+
+<section id="template">
+  <h2><span class="num">05</span>The chat template: how a model knows it is in a conversation</h2>
+  <p>A raw language model only continues text. To make it behave like an assistant, training wraps every turn in special marker tokens, and inference must reproduce that wrapping <i>exactly</i>, byte for byte. Qwen3 uses the "ChatML" format. Type a question and watch the exact string the model receives:</p>
+
+  <div class="demo">
+    <div class="dtitle">chatml renderer</div>
+    <label class="ctl" style="margin-bottom:12px">question
+      <input id="tplq" type="text" value="When is the project deadline?" style="flex:1;font-family:var(--font-mono);font-size:13px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg)" />
+    </label>
+    <pre class="chatml" id="tplout"></pre>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:0">The trailing open <span class="mono">assistant</span> turn is the cue to generate. The <span class="tk">&lt;think&gt;\n\n&lt;/think&gt;</span> block is already closed and empty: Qwen3 normally "thinks out loud" first, and pre-filling an empty think block is the documented way to skip straight to the answer.</p>
+  </div>
+
+  <p>This rendering is hardcoded in <span class="mono">ChatTemplate.swift</span> and proven byte-identical to the reference implementation by the fixture generator (section 13):</p>
+  <pre class="code"><code class="language-swift">public enum ChatTemplate {
+    static let imStart = &quot;&lt;|im_start|&gt;&quot;
+    static let imEnd = &quot;&lt;|im_end|&gt;&quot;
+    /// The empty, pre-closed think block that switches Qwen3 into non-thinking mode.
+    static let emptyThink = &quot;&lt;think&gt;\n\n&lt;/think&gt;\n\n&quot;
+
+    /// Stop tokens: `&lt;|im_end|&gt;` (151645) ends the turn; `&lt;|endoftext|&gt;` (151643) is a safety net.
+    public static let stopTokenIds: [Int] = [151645, 151643]
+
+    /// Render `messages` to the ChatML string. When `addGenerationPrompt` is true, append the open
+    /// assistant turn with the empty think block so the model answers directly.
+    public static func render(_ messages: [ChatMessage], addGenerationPrompt: Bool = true) -&gt; String {
+        var out = &quot;&quot;
+        for m in messages {
+            let content = m.role == .assistant ? cleanAssistantContent(m.content) : m.content
+            out += &quot;\(imStart)\(m.role.rawValue)\n\(content)\(imEnd)\n&quot;
+        }
+        if addGenerationPrompt {
+            out += &quot;\(imStart)assistant\n\(emptyThink)&quot;
+        }
+        return out
+    }</code></pre>
+  <div class="codecap">Sources/OmniKit/Chat/ChatTemplate.swift</div>
+
+  <p>For the fixture conversation this page uses throughout, the rendered prompt tokenizes to <b id="ptcount"></b> ids. Here are the real first and last tokens of that prompt; the dark chips are special marker tokens:</p>
+  <div class="demo">
+    <div class="dtitle">the real prompt's tokens</div>
+    <div class="tokens" id="promptpieces"></div>
+  </div>
+</section>
+
+<section id="quant">
+  <h2><span class="num">06</span>Four-bit weights: the model on a diet</h2>
+  <p>Qwen3-1.7B has about 1.7 billion weights. Worse than the storage: generating <i>each token</i> reads every weight once, so speed is bound by memory bandwidth. Shrinking the weights is a direct speedup:</p>
+  <div class="membars" id="membars"></div>
+
+  <p>The 4-bit scheme is <b>affine group quantization</b>: a group of 128 neighboring weights shares one <span class="mono">scale</span> and one <span class="mono">bias</span>, and each weight is stored as a 4-bit integer <span class="mono">q</span> (0 to 15), reconstructed as <span class="mono">w &asymp; scale &middot; q + bias</span>. Try it on a group of 8 (real groups are 128 wide, same math):</p>
+
+  <div class="demo">
+    <div class="dtitle">quantize a weight group</div>
+    <div class="row" style="margin-bottom:10px">
+      <button class="btn" id="qrand">randomize weights</button>
+      <span class="readout">scale = <b id="qscale"></b> &nbsp; bias = <b id="qbias"></b> &nbsp; packed UInt32: <b id="qpacked"></b></span>
+    </div>
+    <table class="q"><thead><tr><th>original w</th><th>drag</th><th>4-bit q</th><th>reconstructed</th><th>error</th></tr></thead><tbody id="qrows"></tbody></table>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:0">All 8 nibbles pack into a single 32-bit word. The worst case error is half a step (scale / 2): outlier weights stretch the group's range and make every neighbor coarser, which is why groups are kept small.</p>
+  </div>
+
+  <p>The crucial implementation trick: the matrix is <b>never unpacked</b> to multiply it. MLX's <span class="mono">quantizedMM</span> kernel dequantizes each group on the fly <i>inside</i> the multiply, so only 4-bit data ever crosses the memory bus. This file is the entire quantization story in the app:</p>
+  <pre class="code"><code class="language-swift">import Foundation
+import MLX
+
+/// A single 4-bit quantized weight matrix: packed integer data plus the per-group scales and biases
+/// needed to turn it back into real numbers.
+///
+/// LEARNING NOTE - why quantize at all
+/// -----------------------------------
+/// Qwen3-1.7B has ~1.7 billion parameters. In bf16 (2 bytes each) that is ~3.4 GB; in fp32, ~6.8 GB.
+/// On-device that is a lot of memory and, more importantly, a lot of memory *bandwidth*: generating
+/// one token reads every weight once, so token speed is bound by how fast you can stream the weights
+/// from RAM. 4-bit quantization stores each weight in half a byte, cutting both the footprint and the
+/// bandwidth by ~4x versus bf16. The published Qwen3-1.7B-MLX-4bit checkpoint is already in this form.
+///
+/// LEARNING NOTE - affine group quantization (the exact scheme MLX uses)
+/// --------------------------------------------------------------------
+/// &quot;Affine&quot; means each stored 4-bit integer `q` (0...15) maps back to a real value by an affine
+/// formula `w = scale * q + bias`. A single scale/bias pair for a whole matrix would be far too
+/// coarse, so MLX uses *group* quantization: consecutive runs of `groupSize` (128 here) weights
+/// along the input dimension share one scale and one bias. So for a weight matrix of logical shape
+/// `[out, in]`:
+///   - `weight`  is `[out, in / 8]` of UInt32. Each UInt32 packs 8 four-bit values (8 * 4 = 32 bits).
+///   - `scales`  is `[out, in / 128]`, one per group.
+///   - `biases`  is `[out, in / 128]`, one per group.
+/// To reconstruct `w[o, i]`: unpack the nibble at column `i`, then apply the scale/bias of its group
+/// `i / 128`.
+///
+/// LEARNING NOTE - why we never fully unpack for a matmul
+/// -----------------------------------------------------
+/// The naive approach would dequantize the whole `[out, in]` matrix to bf16 and then matmul. That
+/// throws away the entire bandwidth win - you would touch the full-size matrix anyway. Instead MLX
+/// provides `quantizedMM`, a fused kernel that reads the *packed* weights and dequantizes each group
+/// on the fly inside the matmul, so the only large thing crossing the memory bus is the 4-bit data.
+/// That fused path is what makes 4-bit actually faster, not just smaller. We only ever fully
+/// dequantize for the embedding lookup, where we touch a handful of rows, not the whole matrix.
+struct QuantizedTensor {
+    let weight: MLXArray   // UInt32 packed, [out, in * bits / 32]
+    let scales: MLXArray   // [out, in / groupSize]
+    let biases: MLXArray   // [out, in / groupSize]
+    let groupSize: Int
+    let bits: Int
+
+    /// `x @ W^T` with in-kernel dequantization. `transpose: true` matches how Linear layers store
+    /// their weight as `[out, in]`, so the kernel computes `x[..., in] @ W[out, in]^T -&gt; [..., out]`.
+    func matmul(_ x: MLXArray) -&gt; MLXArray {
+        quantizedMM(x, weight, scales: scales, biases: biases,
+                    transpose: true, groupSize: groupSize, bits: bits)
+    }
+
+    /// Embedding-style row gather: dequantize ONLY the rows named by `ids` (one row per token), not
+    /// the whole `[vocab, hidden]` table. `ids` is int32 of shape `[L]`; returns `[L, hidden]` bf16.
+    /// This mirrors MLXNN.QuantizedEmbedding: index the packed rows, then dequantize that small slice.
+    func gatherRows(_ ids: MLXArray) -&gt; MLXArray {
+        dequantized(weight[ids], scales: scales[ids], biases: biases[ids],
+                    groupSize: groupSize, bits: bits, dtype: .bfloat16)
+    }
+}</code></pre>
+  <div class="codecap">Sources/OmniKit/Chat/QuantizedTensor.swift - complete file</div>
+</section>
+
+<section id="block">
+  <h2><span class="num">07</span>One transformer step</h2>
+  <p>The decoder is 28 identical blocks, each two moves with "residual" additions (the input is added back, so each block only learns a correction):</p>
+  <pre class="code" style="font-size:13px"><code class="language-plaintext">h = h + attention( rmsnorm(h) )     // tokens exchange information
+h = h + swiglu_mlp( rmsnorm(h) )    // each token computes on its own</code></pre>
+  <div class="codecap">the shape of every block</div>
+  <p><b>Attention</b> is the part people mean by "transformer": each position emits a <i>query</i> ("what am I looking for"), a <i>key</i> ("what do I contain") and a <i>value</i> ("what I contribute"), and every query softly reads from all positions whose keys match it. RoPE rotates q and k by their position so the model knows token order. <b>Grouped-query attention</b> is a Qwen3 economy: 16 query heads share 8 key/value heads, halving the cache in the next section.</p>
+  <p>Compare this with the embedder loop in section 02; it is the same architecture, and that is exactly why this model was chosen. The differences: weights are read through <span class="mono">QuantizedTensor</span>, keys and values go through a cache, and the final hidden state is turned into vocabulary scores by re-using the embedding matrix transposed (the "tied output head", so a 152k &times; 2048 matrix is not stored twice):</p>
+  <pre class="code"><code class="language-swift">    /// Prefill: run the whole prompt through the model in one causal pass, filling `cache`, and
+    /// return the UNEVALUATED logits `[1, vocab]` (fp32) for the last prompt position - the
+    /// distribution to sample the first generated token from. The caller drives `eval`.
+    func prefill(_ tokenIds: [Int], cache: [KVCache]) -&gt; MLXArray {
+        forward(tokenIds, cache: cache, causal: true)
+    }
+
+    /// Decode one step: run a single token at RoPE offset `cache[0].offset`, append its k/v, and
+    /// return the UNEVALUATED logits `[1, vocab]` (fp32). No mask is needed (the one query may attend
+    /// to every cached position; there are no future positions).
+    func step(_ tokenId: Int, cache: [KVCache]) -&gt; MLXArray {
+        forward([tokenId], cache: cache, causal: false)
+    }
+
+    // MARK: - Shared forward pass
+
+    private func forward(_ tokenIds: [Int], cache: [KVCache], causal: Bool) -&gt; MLXArray {
+        let offset = cache[0].offset
+        let ids = MLXArray(tokenIds.map { Int32($0) })
+        var h = embedTokens.gatherRows(ids).reshaped([1, tokenIds.count, cfg.hiddenSize])
+
+        let maskMode: MLXFast.ScaledDotProductAttentionMaskMode = causal ? .causal : .none
+        for i in 0 ..&lt; cfg.numLayers {
+            let p = &quot;model.layers.\(i).&quot;
+            h = h + attention(rmsNorm(h, p + &quot;input_layernorm.weight&quot;), p, cache: cache[i],
+                              offset: offset, mask: maskMode)
+            h = h + mlp(rmsNorm(h, p + &quot;post_attention_layernorm.weight&quot;), p)
+        }
+        h = rmsNorm(h, &quot;model.norm.weight&quot;)
+
+        // Only the last position feeds the output head, so slice BEFORE the big [vocab] matmul.
+        let last = h[0, tokenIds.count - 1].reshaped([1, cfg.hiddenSize])   // [1, hidden]
+        return embedTokens.matmul(last).asType(.float32)                    // [1, vocab]
+    }
+
+    private func attention(_ x: MLXArray, _ p: String, cache: KVCache, offset: Int,
+                           mask: MLXFast.ScaledDotProductAttentionMaskMode) -&gt; MLXArray {
+        let L = x.dim(1)
+        var q = w.quantized(p + &quot;self_attn.q_proj&quot;).matmul(x)
+            .reshaped([1, L, cfg.numHeads, cfg.headDim]).transposed(0, 2, 1, 3)
+        var k = w.quantized(p + &quot;self_attn.k_proj&quot;).matmul(x)
+            .reshaped([1, L, cfg.numKVHeads, cfg.headDim]).transposed(0, 2, 1, 3)
+        let v = w.quantized(p + &quot;self_attn.v_proj&quot;).matmul(x)
+            .reshaped([1, L, cfg.numKVHeads, cfg.headDim]).transposed(0, 2, 1, 3)
+
+        if cfg.useQKNorm {
+            q = headNorm(q, p + &quot;self_attn.q_norm.weight&quot;)
+            k = headNorm(k, p + &quot;self_attn.k_norm.weight&quot;)
+        }
+        q = rope(q, offset: offset)
+        k = rope(k, offset: offset)
+
+        // Append this step&#x27;s k/v and attend over the full valid prefix. GQA (8 kv heads vs 16 q
+        // heads) is handled inside scaledDotProductAttention by broadcasting kv heads across queries.
+        let (ck, cv) = cache.update(keys: k, values: v)
+        var o = MLXFast.scaledDotProductAttention(queries: q, keys: ck, values: cv, scale: scale, mask: mask)
+        o = o.transposed(0, 2, 1, 3).reshaped([1, L, cfg.numHeads * cfg.headDim])
+        return w.quantized(p + &quot;self_attn.o_proj&quot;).matmul(o)
+    }
+
+    private func mlp(_ x: MLXArray, _ p: String) -&gt; MLXArray {
+        let gate = MLXNN.silu(w.quantized(p + &quot;mlp.gate_proj&quot;).matmul(x))
+        let up = w.quantized(p + &quot;mlp.up_proj&quot;).matmul(x)
+        return w.quantized(p + &quot;mlp.down_proj&quot;).matmul(gate * up)
+    }</code></pre>
+  <div class="codecap">Sources/OmniKit/Chat/Qwen3ChatDecoder.swift</div>
+  <details class="fullfile"><summary>show the complete file (130 lines)</summary>
+    <pre class="code" style="margin-top:0;border-radius:0 8px 8px 8px"><code class="language-swift">import Foundation
+import MLX
+import MLXFast
+import MLXNN
+
+/// The Qwen3-1.7B causal language model, implemented by hand on MLX primitives.
+///
+/// This is a deliberate twin of `Qwen3Backbone` (the embedder&#x27;s transformer). They share the SAME
+/// architecture - that is the whole reason this model was chosen - but they are kept as separate
+/// files on purpose: the embedder is numerically frozen against a Python reference, while this
+/// decoder adds the three things generation needs and embedding does not:
+///   1. quantized (4-bit) weights instead of fp32/bf16 (``QuantizedTensor``),
+///   2. a per-layer KV cache so decoding is one forward pass per token (``KVCache``),
+///   3. a tied output head that turns the final hidden state into a logit per vocabulary token.
+///
+/// LEARNING NOTE - one transformer block, end to end
+/// -------------------------------------------------
+/// Each of the 28 blocks does, in order:
+///   h -&gt; RMSNorm -&gt; attention -&gt; add back to h     (the &quot;attention residual&quot;)
+///   h -&gt; RMSNorm -&gt; SwiGLU MLP -&gt; add back to h     (the &quot;MLP residual&quot;)
+/// Attention: project the normalized h into queries/keys/values, give each head its own RMSNorm
+/// (a Qwen3 detail, `use_qk_norm`), rotate q and k by their position (RoPE), append k/v to the cache,
+/// then `softmax(q . k^T / sqrt(headDim)) . v`. The MLP is &quot;SwiGLU&quot;: `down( silu(gate(h)) * up(h) )`.
+/// After all blocks, a final RMSNorm, then the tied embedding matrix maps the last hidden vector to
+/// `[vocab]` logits.
+///
+/// LEARNING NOTE - precision
+/// -------------------------
+/// Matmuls and attention run in bf16 (the weights are 4-bit, so an fp32 compute path would be
+/// pointless and just slower). RMSNorm computes its variance in fp32 and casts back - the same idiom
+/// the embedder uses - because the mean-of-squares is the one place bf16&#x27;s small mantissa actually
+/// hurts. Logits are returned as fp32 so the CPU-side sampler sees clean numbers.
+final class Qwen3ChatDecoder {
+    let cfg: ChatConfig
+    private let w: ChatWeightStore
+    private let rope: RoPE
+    private let scale: Float
+    private let embedTokens: QuantizedTensor
+
+    init(weights: ChatWeightStore, config: ChatConfig) {
+        self.cfg = config
+        self.w = weights
+        self.rope = RoPE(dimensions: config.headDim, traditional: false, base: config.ropeTheta)
+        self.scale = Float(pow(Double(config.headDim), -0.5))
+        self.embedTokens = weights.quantized(&quot;model.embed_tokens&quot;)
+    }
+
+    /// One empty KV cache per layer.
+    func makeCache() -&gt; [KVCache] {
+        (0 ..&lt; cfg.numLayers).map { _ in KVCache(kvHeads: cfg.numKVHeads, headDim: cfg.headDim) }
+    }
+
+    /// Prefill: run the whole prompt through the model in one causal pass, filling `cache`, and
+    /// return the UNEVALUATED logits `[1, vocab]` (fp32) for the last prompt position - the
+    /// distribution to sample the first generated token from. The caller drives `eval`.
+    func prefill(_ tokenIds: [Int], cache: [KVCache]) -&gt; MLXArray {
+        forward(tokenIds, cache: cache, causal: true)
+    }
+
+    /// Decode one step: run a single token at RoPE offset `cache[0].offset`, append its k/v, and
+    /// return the UNEVALUATED logits `[1, vocab]` (fp32). No mask is needed (the one query may attend
+    /// to every cached position; there are no future positions).
+    func step(_ tokenId: Int, cache: [KVCache]) -&gt; MLXArray {
+        forward([tokenId], cache: cache, causal: false)
+    }
+
+    // MARK: - Shared forward pass
+
+    private func forward(_ tokenIds: [Int], cache: [KVCache], causal: Bool) -&gt; MLXArray {
+        let offset = cache[0].offset
+        let ids = MLXArray(tokenIds.map { Int32($0) })
+        var h = embedTokens.gatherRows(ids).reshaped([1, tokenIds.count, cfg.hiddenSize])
+
+        let maskMode: MLXFast.ScaledDotProductAttentionMaskMode = causal ? .causal : .none
+        for i in 0 ..&lt; cfg.numLayers {
+            let p = &quot;model.layers.\(i).&quot;
+            h = h + attention(rmsNorm(h, p + &quot;input_layernorm.weight&quot;), p, cache: cache[i],
+                              offset: offset, mask: maskMode)
+            h = h + mlp(rmsNorm(h, p + &quot;post_attention_layernorm.weight&quot;), p)
+        }
+        h = rmsNorm(h, &quot;model.norm.weight&quot;)
+
+        // Only the last position feeds the output head, so slice BEFORE the big [vocab] matmul.
+        let last = h[0, tokenIds.count - 1].reshaped([1, cfg.hiddenSize])   // [1, hidden]
+        return embedTokens.matmul(last).asType(.float32)                    // [1, vocab]
+    }
+
+    private func attention(_ x: MLXArray, _ p: String, cache: KVCache, offset: Int,
+                           mask: MLXFast.ScaledDotProductAttentionMaskMode) -&gt; MLXArray {
+        let L = x.dim(1)
+        var q = w.quantized(p + &quot;self_attn.q_proj&quot;).matmul(x)
+            .reshaped([1, L, cfg.numHeads, cfg.headDim]).transposed(0, 2, 1, 3)
+        var k = w.quantized(p + &quot;self_attn.k_proj&quot;).matmul(x)
+            .reshaped([1, L, cfg.numKVHeads, cfg.headDim]).transposed(0, 2, 1, 3)
+        let v = w.quantized(p + &quot;self_attn.v_proj&quot;).matmul(x)
+            .reshaped([1, L, cfg.numKVHeads, cfg.headDim]).transposed(0, 2, 1, 3)
+
+        if cfg.useQKNorm {
+            q = headNorm(q, p + &quot;self_attn.q_norm.weight&quot;)
+            k = headNorm(k, p + &quot;self_attn.k_norm.weight&quot;)
+        }
+        q = rope(q, offset: offset)
+        k = rope(k, offset: offset)
+
+        // Append this step&#x27;s k/v and attend over the full valid prefix. GQA (8 kv heads vs 16 q
+        // heads) is handled inside scaledDotProductAttention by broadcasting kv heads across queries.
+        let (ck, cv) = cache.update(keys: k, values: v)
+        var o = MLXFast.scaledDotProductAttention(queries: q, keys: ck, values: cv, scale: scale, mask: mask)
+        o = o.transposed(0, 2, 1, 3).reshaped([1, L, cfg.numHeads * cfg.headDim])
+        return w.quantized(p + &quot;self_attn.o_proj&quot;).matmul(o)
+    }
+
+    private func mlp(_ x: MLXArray, _ p: String) -&gt; MLXArray {
+        let gate = MLXNN.silu(w.quantized(p + &quot;mlp.gate_proj&quot;).matmul(x))
+        let up = w.quantized(p + &quot;mlp.up_proj&quot;).matmul(x)
+        return w.quantized(p + &quot;mlp.down_proj&quot;).matmul(gate * up)
+    }
+
+    /// RMSNorm over the last (feature) axis, using MLX&#x27;s fused kernel. This is the exact same op the
+    /// reference (mlx_lm&#x27;s nn.RMSNorm == mx.fast.rms_norm) uses, including its internal fp32
+    /// accumulation, so the Swift logits match the Python reference to within bf16 rounding.
+    private func rmsNorm(_ x: MLXArray, _ key: String) -&gt; MLXArray {
+        MLXFast.rmsNorm(x, weight: w.plain(key), eps: cfg.rmsNormEps)
+    }
+
+    /// Per-head RMSNorm (same fused kernel; normalizes over head_dim, the last axis).
+    private func headNorm(_ x: MLXArray, _ key: String) -&gt; MLXArray {
+        MLXFast.rmsNorm(x, weight: w.plain(key), eps: cfg.rmsNormEps)
+    }
+}</code></pre>
+  </details>
+</section>
+
+<section id="kv">
+  <h2><span class="num">08</span>The KV cache: why generation is fast</h2>
+  <p>Attention lets each token look at every earlier token. Run naively, generating token <i>t</i> would re-run the whole network over all <i>t</i> positions, so an N-token answer costs 1 + 2 + ... + N passes. The fix rests on one observation: <b>when you append a token, the keys and values of every earlier token do not change.</b> So remember them.</p>
+
+  <div class="demo">
+    <div class="dtitle">prefill vs decode</div>
+    <div class="row" style="margin-bottom:12px">
+      <button class="btn on" id="mprefill">prefill (the prompt)</button>
+      <button class="btn" id="mdecode">decode (one new token)</button>
+      <label class="ctl">tokens <input id="mn" type="range" min="4" max="10" value="6" /></label>
+    </div>
+    <div class="maskwrap"><table class="mask" id="masktable"></table></div>
+    <p class="readout" id="maskcap" style="margin-top:10px"></p>
+  </div>
+
+  <div class="demo">
+    <div class="dtitle">what the cache buys</div>
+    <label class="ctl">context length <input id="kvn" type="range" min="128" max="8192" step="128" value="2048" style="width:240px" /> <b id="kvtok" class="mono"></b></label>
+    <div class="bars" style="margin-top:12px" id="kvbars"></div>
+    <p class="readout" id="kvmem" style="margin-top:10px"></p>
+  </div>
+
+  <p>The cache itself is plain bookkeeping: per layer, append the new K/V rows into a buffer that grows in 256-token slabs, and hand attention a view of the valid prefix. The <span class="mono">offset</span> doubles as the next RoPE position:</p>
+  <pre class="code"><code class="language-swift">import Foundation
+import MLX
+
+/// Per-layer key/value cache that makes autoregressive generation fast.
+///
+/// LEARNING NOTE - the problem the cache solves
+/// --------------------------------------------
+/// Attention lets each token look at every earlier token. If you generated text by re-running the
+/// whole transformer over the entire sequence-so-far for every new token, step `t` would attend over
+/// `t` positions, and producing `N` tokens would cost on the order of `1 + 2 + ... + N = O(N^2)`
+/// full forward passes. That is hopelessly slow.
+///
+/// The key observation: when you append one token, the keys (K) and values (V) computed for all the
+/// *earlier* tokens do not change. Only the new token contributes a new K and V row, and only the new
+/// token issues a query. So if we remember every layer&#x27;s K and V from the past, each generation step
+/// is just: compute K/V/Q for the single new token, append its K/V to the remembered tensors, and run
+/// attention of that one query against all cached keys. That is `O(t)` work for step `t` and, vitally,
+/// exactly ONE forward pass per token instead of `t`. The remembered K/V per layer is this cache.
+///
+/// LEARNING NOTE - prefill vs decode
+/// ---------------------------------
+/// Generation has two phases. &quot;Prefill&quot; runs the whole prompt through the model in a single batched
+/// pass: it fills the cache for all prompt positions at once and produces the logits for the last
+/// prompt token (the first thing to sample). &quot;Decode&quot; then runs one token at a time, each step
+/// appending a single K/V row. Prefill needs a causal mask (a prompt token must not peek at later
+/// prompt tokens); decode needs no mask at all, because the single new query is allowed to see every
+/// cached position and there are no future positions to hide.
+///
+/// LEARNING NOTE - memory
+/// ----------------------
+/// Each cached token costs, across all layers:
+///     2 (K and V) * numLayers * numKVHeads * headDim * bytesPerElement
+/// For Qwen3-1.7B in bf16 that is 2 * 28 * 8 * 128 * 2 = 114,688 bytes ~= 112 KiB per token, so the
+/// full 8192-token context cap is ~896 MiB. We grow the backing buffer in fixed-size slabs (rather than
+/// reallocating on every token) to keep allocation churn down; `offset` tracks how many positions are
+/// actually valid, and doubles as the RoPE position for the next token.
+final class KVCache {
+    let kvHeads: Int
+    let headDim: Int
+
+    /// Number of valid cached positions. Also the RoPE offset to use for the next appended token.
+    private(set) var offset = 0
+
+    /// Grow capacity in slabs of this many tokens, so we reallocate ~once per 256 tokens, not per token.
+    static let growthStep = 256
+
+    private var keys: MLXArray?      // [1, kvHeads, capacity, headDim], bf16
+    private var values: MLXArray?
+
+    init(kvHeads: Int, headDim: Int) {
+        self.kvHeads = kvHeads
+        self.headDim = headDim
+    }
+
+    /// Append `newKeys`/`newValues` (shape `[1, kvHeads, L, headDim]`) and return views covering all
+    /// valid positions so far (`[1, kvHeads, offset + L, headDim]`) for attention to read.
+    func update(keys newKeys: MLXArray, values newValues: MLXArray) -&gt; (keys: MLXArray, values: MLXArray) {
+        let L = newKeys.dim(2)
+        let needed = offset + L
+        ensureCapacity(needed)
+        // Write the new rows into the preallocated slab at [offset ..&lt; offset+L] along the time axis.
+        keys![0..., 0..., offset ..&lt; needed, 0...] = newKeys
+        values![0..., 0..., offset ..&lt; needed, 0...] = newValues
+        offset = needed
+        // Return only the valid prefix; the slab may be larger.
+        return (keys![0..., 0..., 0 ..&lt; offset, 0...],
+                values![0..., 0..., 0 ..&lt; offset, 0...])
+    }
+
+    private func ensureCapacity(_ needed: Int) {
+        let current = keys?.dim(2) ?? 0
+        if needed &lt;= current { return }
+        let newCap = ((needed + Self.growthStep - 1) / Self.growthStep) * Self.growthStep
+        let shape = [1, kvHeads, newCap, headDim]
+        let grownK = MLXArray.zeros(shape, dtype: .bfloat16)
+        let grownV = MLXArray.zeros(shape, dtype: .bfloat16)
+        if let k = keys, let v = values, offset &gt; 0 {
+            grownK[0..., 0..., 0 ..&lt; offset, 0...] = k[0..., 0..., 0 ..&lt; offset, 0...]
+            grownV[0..., 0..., 0 ..&lt; offset, 0...] = v[0..., 0..., 0 ..&lt; offset, 0...]
+        }
+        keys = grownK
+        values = grownV
+    }
+}</code></pre>
+  <div class="codecap">Sources/OmniKit/Chat/KVCache.swift - complete file</div>
+</section>
+
+<section id="sampling">
+  <h2><span class="num">09</span>Picking the next token</h2>
+  <p>Each forward pass ends with one <b>logit</b> (an unnormalized score) per vocabulary token. Softmax turns logits into probabilities; then you choose. The chart below is not an illustration: these are the model's <b>real recorded candidates for its first answer token</b>, for two different prompts. Play with the two knobs every chat UI hides:</p>
+
+  <div class="demo">
+    <div class="dtitle">sampling playground, on real logits</div>
+    <div class="tabs">
+      <button class="btn on" id="sopen">open-ended: "Write a one-sentence story about a robot."</button>
+      <button class="btn" id="sgrounded">grounded RAG: "When is the project deadline?"</button>
+    </div>
+    <div class="row" style="margin-bottom:14px">
+      <label class="ctl">temperature <input id="stemp" type="range" min="0" max="1.5" step="0.05" value="0.7" style="width:140px" /> <b id="stempv" class="mono">0.70</b></label>
+      <label class="ctl">top-p <input id="stopp" type="range" min="0.1" max="1" step="0.05" value="0.8" style="width:140px" /> <b id="stoppv" class="mono">0.80</b></label>
+    </div>
+    <div class="bars" id="sbars"></div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn primary" id="sdraw">draw 1 token</button>
+      <button class="btn" id="sdraw20">draw 20</button>
+      <button class="btn" id="sreset">reset</button>
+      <span class="readout" id="snote"></span>
+    </div>
+    <div class="tokens" id="sdrawn" style="margin-top:10px"></div>
+  </div>
+
+  <p><b>Temperature</b> divides the logits before softmax: low sharpens the distribution toward the favorite, 0 means always-take-the-top ("greedy", fully deterministic, what the verification fixtures use), high flattens it toward chaos. <b>Top-p</b> keeps only the smallest set of tokens whose probabilities sum to p (the orange bars), zeroes the rest, and renormalizes; it cuts off the long tail of barely-plausible junk. The draws above use the exact same seeded SplitMix64 generator as the app, ported to JavaScript.</p>
+  <p>The two prompts teach the deepest lesson on this page. On the open-ended ask, "The" and "A" are nearly tied and the knobs genuinely matter. On the grounded question, with the source text pasted into the prompt, the model's top choice holds essentially 100% of the probability at any temperature: <b>retrieval does not just inform the answer, it collapses the distribution</b>, which is why RAG answers come out stable instead of creative.</p>
+  <pre class="code"><code class="language-swift">struct Sampler {
+    var temperature: Float
+    var topP: Float
+    private var rng: SplitMix64
+
+    init(temperature: Float, topP: Float, seed: UInt64) {
+        self.temperature = temperature
+        self.topP = topP
+        self.rng = SplitMix64(seed: seed)
+    }
+
+    /// Choose a token id from `logits` (length == vocab size, fp32).
+    mutating func sample(_ logits: [Float]) -&gt; Int {
+        if temperature &lt;= 0 { return argmax(logits) }
+
+        // 1. Select the top `k` logit indices (k small relative to vocab).
+        let k = min(512, logits.count)
+        let topIdx = topKIndices(logits, k: k)
+
+        // 2. Softmax over just those, with temperature, numerically stabilized by max-subtraction.
+        let invT = 1 / temperature
+        var maxLogit = -Float.greatestFiniteMagnitude
+        for i in topIdx { maxLogit = max(maxLogit, logits[i]) }
+        var probs = [Float](repeating: 0, count: topIdx.count)
+        var sum: Float = 0
+        for (j, i) in topIdx.enumerated() {
+            let e = expf((logits[i] - maxLogit) * invT)
+            probs[j] = e
+            sum += e
+        }
+        for j in probs.indices { probs[j] /= sum }
+
+        // 3. Nucleus cut: walk the already-descending list, keep until cumulative &gt;= topP.
+        //    topKIndices returns indices sorted by descending logit, so probs is descending too.
+        var cutoff = topIdx.count
+        if topP &lt; 1 {
+            var cum: Float = 0
+            for j in probs.indices {
+                cum += probs[j]
+                if cum &gt;= topP { cutoff = j + 1; break }
+            }
+        }
+
+        // 4. Renormalize the kept nucleus and draw.
+        var keptSum: Float = 0
+        for j in 0 ..&lt; cutoff { keptSum += probs[j] }
+        let r = Float(rng.next() &gt;&gt; 11) / Float(1 &lt;&lt; 53) * keptSum   // uniform in [0, keptSum)
+        var acc: Float = 0
+        for j in 0 ..&lt; cutoff {
+            acc += probs[j]
+            if r &lt; acc { return topIdx[j] }
+        }
+        return topIdx[cutoff - 1]
+    }</code></pre>
+  <div class="codecap">Sources/OmniKit/Chat/Sampler.swift - temperature, nucleus cut, and the draw</div>
+  <details class="fullfile"><summary>show the complete file (143 lines)</summary>
+    <pre class="code" style="margin-top:0;border-radius:0 8px 8px 8px"><code class="language-swift">import Foundation
+
+/// A tiny, fully deterministic pseudo-random generator (SplitMix64).
+///
+/// LEARNING NOTE - why a custom RNG
+/// -------------------------------
+/// Sampling needs randomness, but for tests and reproducibility we want to be able to fix a seed and
+/// get the exact same sequence every run. SplitMix64 is a well-known 64-bit generator that is one
+/// line of arithmetic per draw and has good statistical quality - ideal for &quot;give me repeatable
+/// randomness with no dependencies.&quot;
+struct SplitMix64: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -&gt; UInt64 {
+        state &amp;+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z &gt;&gt; 30)) &amp;* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z &gt;&gt; 27)) &amp;* 0x94D0_49BB_1331_11EB
+        return z ^ (z &gt;&gt; 31)
+    }
+}
+
+/// Picks the next token id from a row of logits using temperature + nucleus (top-p) sampling.
+///
+/// LEARNING NOTE - logits, temperature, softmax
+/// --------------------------------------------
+/// The model outputs a &quot;logit&quot; (an unnormalized score) for every one of the ~152k vocabulary tokens.
+/// Softmax turns logits into a probability distribution: `p_i = exp(logit_i) / sum_j exp(logit_j)`.
+/// &quot;Temperature&quot; rescales the logits before softmax (`logit_i / T`): T &lt; 1 sharpens the distribution
+/// (more confident, more repetitive), T &gt; 1 flattens it (more random), and T = 0 means &quot;always take
+/// the single highest logit&quot; (greedy / argmax), which is what the verification fixtures use because
+/// it is deterministic.
+///
+/// LEARNING NOTE - nucleus (top-p) sampling
+/// ----------------------------------------
+/// Sampling from the full distribution occasionally picks a very unlikely, incoherent token. Top-p
+/// fixes this: sort tokens by probability, keep the smallest set whose probabilities sum to at least
+/// `p` (the &quot;nucleus&quot;), zero out the rest, renormalize, and sample from what remains. So the model
+/// can still be creative among plausible continuations but almost never derails into nonsense.
+///
+/// LEARNING NOTE - why we only look at the top 512 logits
+/// -----------------------------------------------------
+/// A 152k-way softmax on the CPU every token would be wasteful, and the probability mass outside the
+/// few hundred most likely tokens is negligible for any sane temperature/top-p. So we first select
+/// the 512 highest logits, then do softmax/top-p on just those. This keeps per-token CPU cost well
+/// under a millisecond. (Sampling on the CPU, not the GPU, also keeps the RNG deterministic and off
+/// the shared GPU stream the embedder uses.)
+struct Sampler {
+    var temperature: Float
+    var topP: Float
+    private var rng: SplitMix64
+
+    init(temperature: Float, topP: Float, seed: UInt64) {
+        self.temperature = temperature
+        self.topP = topP
+        self.rng = SplitMix64(seed: seed)
+    }
+
+    /// Choose a token id from `logits` (length == vocab size, fp32).
+    mutating func sample(_ logits: [Float]) -&gt; Int {
+        if temperature &lt;= 0 { return argmax(logits) }
+
+        // 1. Select the top `k` logit indices (k small relative to vocab).
+        let k = min(512, logits.count)
+        let topIdx = topKIndices(logits, k: k)
+
+        // 2. Softmax over just those, with temperature, numerically stabilized by max-subtraction.
+        let invT = 1 / temperature
+        var maxLogit = -Float.greatestFiniteMagnitude
+        for i in topIdx { maxLogit = max(maxLogit, logits[i]) }
+        var probs = [Float](repeating: 0, count: topIdx.count)
+        var sum: Float = 0
+        for (j, i) in topIdx.enumerated() {
+            let e = expf((logits[i] - maxLogit) * invT)
+            probs[j] = e
+            sum += e
+        }
+        for j in probs.indices { probs[j] /= sum }
+
+        // 3. Nucleus cut: walk the already-descending list, keep until cumulative &gt;= topP.
+        //    topKIndices returns indices sorted by descending logit, so probs is descending too.
+        var cutoff = topIdx.count
+        if topP &lt; 1 {
+            var cum: Float = 0
+            for j in probs.indices {
+                cum += probs[j]
+                if cum &gt;= topP { cutoff = j + 1; break }
+            }
+        }
+
+        // 4. Renormalize the kept nucleus and draw.
+        var keptSum: Float = 0
+        for j in 0 ..&lt; cutoff { keptSum += probs[j] }
+        let r = Float(rng.next() &gt;&gt; 11) / Float(1 &lt;&lt; 53) * keptSum   // uniform in [0, keptSum)
+        var acc: Float = 0
+        for j in 0 ..&lt; cutoff {
+            acc += probs[j]
+            if r &lt; acc { return topIdx[j] }
+        }
+        return topIdx[cutoff - 1]
+    }
+
+    private func argmax(_ logits: [Float]) -&gt; Int {
+        var best = 0
+        var bestV = logits[0]
+        for i in 1 ..&lt; logits.count where logits[i] &gt; bestV { bestV = logits[i]; best = i }
+        return best
+    }
+
+    /// Indices of the `k` largest logits, sorted by descending logit. Partial selection via a
+    /// fixed-size min-heap keyed on logit value, so cost is O(n log k), not a full O(n log n) sort.
+    private func topKIndices(_ logits: [Float], k: Int) -&gt; [Int] {
+        var heap = [Int]()   // holds candidate indices; heap[0] is the smallest logit kept so far
+        heap.reserveCapacity(k)
+        func siftDown(_ start: Int) {
+            var root = start
+            while true {
+                let l = 2 * root + 1, r = 2 * root + 2
+                var smallest = root
+                if l &lt; heap.count &amp;&amp; logits[heap[l]] &lt; logits[heap[smallest]] { smallest = l }
+                if r &lt; heap.count &amp;&amp; logits[heap[r]] &lt; logits[heap[smallest]] { smallest = r }
+                if smallest == root { break }
+                heap.swapAt(root, smallest); root = smallest
+            }
+        }
+        func siftUp(_ start: Int) {
+            var child = start
+            while child &gt; 0 {
+                let parent = (child - 1) / 2
+                if logits[heap[child]] &lt; logits[heap[parent]] { heap.swapAt(child, parent); child = parent }
+                else { break }
+            }
+        }
+        for i in logits.indices {
+            if heap.count &lt; k {
+                heap.append(i); siftUp(heap.count - 1)
+            } else if logits[i] &gt; logits[heap[0]] {
+                heap[0] = i; siftDown(0)
+            }
+        }
+        return heap.sorted { logits[$0] &gt; logits[$1] }
+    }
+}</code></pre>
+  </details>
+</section>
+
+<section id="streaming">
+  <h2><span class="num">10</span>Streaming text without broken characters</h2>
+  <p>Tokens are chunks of UTF-8 bytes, and one on-screen character can be split across several tokens. Decode each token by itself and the join points come out as the replacement character. The fix: keep decoding the running sequence and only emit the new, <i>complete</i> suffix, holding back anything that ends mid-character. Step through a real example; the emoji arrives as three byte-fragments:</p>
+
+  <div class="demo">
+    <div class="dtitle">hold-back streaming, token by token</div>
+    <div class="row" style="margin-bottom:12px">
+      <button class="btn primary" id="stnext">feed next token</button>
+      <button class="btn" id="streset">reset</button>
+      <span class="readout" id="ststatus"></span>
+    </div>
+    <div class="tokens" id="stfeed" style="margin-bottom:14px"></div>
+    <div class="streamcols">
+      <div><h4>naive: decode each token alone</h4><div class="streamout" id="stnaive"></div></div>
+      <div><h4>hold-back: what Omni shows</h4><div class="streamout" id="stheld"></div></div>
+    </div>
+  </div>
+
+  <p>The byte bookkeeping lives in the swift-tokenizers package; Omni's wrapper exists to give the engine a one-method surface and to document the idea:</p>
+  <pre class="code"><code class="language-swift">import Foundation
+import Tokenizers
+
+/// Converts a stream of generated token ids into displayable text, one token at a time, without ever
+/// emitting broken characters.
+///
+/// LEARNING NOTE - why naive per-token decoding breaks
+/// ---------------------------------------------------
+/// Qwen3 (like most modern LLMs) uses byte-level BPE: a token is a chunk of UTF-8 *bytes*, not a
+/// whole character. A single character can span several tokens - an emoji or a CJK glyph is multiple
+/// bytes, and the tokenizer may split those bytes across token boundaries. If you decode each token
+/// id in isolation and concatenate, a multi-byte character that straddles two tokens comes out as the
+/// replacement character (U+FFFD, the &quot;?&quot;) because the first token ends mid-character.
+///
+/// LEARNING NOTE - the hold-back algorithm
+/// ---------------------------------------
+/// The fix is to decode the running list of ids and emit only the *new, complete* suffix: keep a
+/// decoded prefix, append the next id, decode again, and if the new decode ends in an incomplete
+/// scalar (U+FFFD) or did not grow, hold it back and wait for the next token to complete the
+/// character. swift-tokenizers ships exactly this as `StreamingDetokenizer`, so we wrap it rather
+/// than re-derive the byte bookkeeping; this type exists to give the rest of OmniKit a small, stable
+/// surface and to host this explanation.
+///
+/// KNOWN LIMITATION - no end-of-stream flush
+/// -----------------------------------------
+/// `StreamingDetokenizer` exposes no finalize API, so bytes still held back when generation stops are
+/// dropped. That only loses text when generation is cut off mid-character (a `maxTokens` truncation
+/// landing inside a multi-byte sequence); a normal stop-token ending always follows complete text.
+final class Detokenizer {
+    private let inner: StreamingDetokenizer
+
+    init(tokenizer: any Tokenizer) {
+        self.inner = StreamingDetokenizer(tokenizer: tokenizer, skipSpecialTokens: true)
+    }
+
+    /// Feed one token id. Returns a displayable chunk, or nil if the buffer currently ends mid-
+    /// character and the caller should feed the next token before anything is shown.
+    func consume(_ id: Int) throws -&gt; String? {
+        try inner.consume(id)
+    }
+}</code></pre>
+  <div class="codecap">Sources/OmniKit/Chat/Detokenizer.swift - complete file</div>
+</section>
+
+<section id="rag">
+  <h2><span class="num">11</span>Grounding answers in your files</h2>
+  <p>A 1.7B-parameter model knows approximately nothing, and that is fine, because Omni never asks it to remember. It asks it to <b>read</b>. Before generating, the app embeds your question with the search embedder from section 02, finds the most similar indexed chunks, pastes their text into the prompt as numbered sources, and instructs the model to answer only from them and cite. This is retrieval-augmented generation (RAG); it is the entire reason a small local model gives trustworthy answers.</p>
+  <p>One subtlety is worth seeing. The index stores only short snippets, so the full chunk text is <b>re-derived</b> from the original file at question time, re-chunking it with the exact code the indexer used. A snippet-equality check makes a wrong-text citation structurally impossible; on any drift it falls back to the stored snippet:</p>
+  <pre class="code"><code class="language-swift">    /// Re-derive a candidate chunk&#x27;s text, or return nil to skip it. Caches extraction per file.
+    private static func resolveText(_ c: Candidate, settings: IndexSettings,
+                                    cache: inout [String: [TextChunker.Piece]?]) -&gt; (text: String, snippetOnly: Bool)? {
+        let url = URL(fileURLWithPath: c.path)
+        let fileName = url.lastPathComponent
+
+        // Non-text chunks (images, video, scanned PDF pages) have no extractable passage; use the
+        // stored snippet if it carries information, otherwise skip (a bare filename helps no one).
+        if c.kind != &quot;text&quot; {
+            if c.snippet.isEmpty || c.snippet == fileName { return nil }
+            let tag = c.kind == &quot;image&quot; ? &quot;[image] &quot; : (c.kind == &quot;video&quot; ? &quot;[video] &quot; : &quot;[scanned] &quot;)
+            return (tag + c.snippet, true)
+        }
+
+        func snippetFallback() -&gt; (String, Bool)? { c.snippet.isEmpty ? nil : (c.snippet, true) }
+
+        // Cheap drift pre-check: if the file changed since indexing, do not trust the re-chunk.
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: c.path),
+           let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970,
+           abs(mtime - c.modified) &gt; 1 {
+            return snippetFallback()
+        }
+
+        // Extract + chunk the file once, cached across this file&#x27;s candidates.
+        let pieces: [TextChunker.Piece]?
+        if let cached = cache[c.path] {
+            pieces = cached
+        } else {
+            pieces = extractPieces(url, maxChars: settings.maxCharsPerChunk)
+            cache[c.path] = pieces
+        }
+        guard let pieces else { return snippetFallback() }
+
+        // Guard: the re-derived chunk&#x27;s snippet must equal the stored one, else something drifted.
+        if c.chunkIndex &lt; pieces.count, TextChunker.snippet(pieces[c.chunkIndex].text) == c.snippet {
+            return (pieces[c.chunkIndex].text, false)
+        }
+        return snippetFallback()</code></pre>
+  <div class="codecap">Sources/OmniKit/Chat/ChatContextBuilder.swift - the drift guard</div>
+
+  <p>Now watch everything on this page run at once. This replay is not a simulation: it is the exact greedy token sequence recorded from the real model answering the fixture question over the fixture source, the same 32 tokens the verifier checks one-for-one.</p>
+
+  <div class="demo">
+    <div class="dtitle">a real recorded generation</div>
+    <div class="chatreplay">
+      <div class="readout" style="margin-bottom:8px">source [1] notes.md (Line 1): <span id="ragsrc"></span></div>
+      <div class="bubble-q" id="ragq"></div>
+      <div class="bubble-a"><span id="raga"></span><span class="cursor" id="ragcur" style="display:none"></span></div>
+      <div id="ragstop"></div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn primary" id="ragplay">play the recorded generation</button>
+      <span class="readout" id="ragstat"></span>
+    </div>
+  </div>
+</section>
+
+<section id="gpu">
+  <h2><span class="num">12</span>Sharing one GPU</h2>
+  <p>MLX feeds a single GPU command stream, and Omni already runs the search embedder and background indexing on it. If generation hogged the GPU, search would freeze mid-answer. So every GPU touch goes through one gate with three priority tiers:</p>
+  <div class="tiers">
+    <div class="tier"><span class="tname" style="color:var(--accent-fg)">high</span><span class="tdesc">interactive search queries - preempt everything, wait at most one in-flight op</span></div>
+    <div class="tier"><span class="tname">chat</span><span class="tdesc">LLM generation - yields to search between decode steps, so a search waits at most one token (~20 ms)</span></div>
+    <div class="tier"><span class="tname" style="color:var(--faint)">low</span><span class="tdesc">indexing and the folder-map projection - pauses while either of the above is queued</span></div>
+  </div>
+  <p>Sampling and detokenization run on the CPU, outside the gate, so they never block search at all. The gate is a textbook condition variable, originally written by Han Xiao for search vs indexing and extended to three tiers for chat:</p>
+  <pre class="code"><code class="language-swift">    /// Three GPU priority tiers, all serialized through one gate (MLX is not thread-safe):
+    ///   .high  (interactive search)  waits only for the in-flight op.
+    ///   .chat  (LLM generation)      also yields to any queued search.
+    ///   .low   (indexing/projection) also yields to any queued search OR chat.
+    /// So a search preempts both chat and indexing, and chat preempts indexing, each waiting at most
+    /// one in-flight op (for chat that is a single decode step, so search stays responsive mid-answer).
+    private enum GatePriority { case high, chat, low }
+
+    private func run&lt;T&gt;(_ priority: GatePriority, _ work: () -&gt; T) -&gt; T {
+        cond.lock()
+        switch priority { case .high: highWaiting += 1; case .chat: chatWaiting += 1; case .low: break }
+        while busy
+            || (priority == .low &amp;&amp; (highWaiting &gt; 0 || chatWaiting &gt; 0))
+            || (priority == .chat &amp;&amp; highWaiting &gt; 0) { cond.wait() }
+        busy = true
+        switch priority { case .high: highWaiting -= 1; case .chat: chatWaiting -= 1; case .low: break }
+        cond.unlock()
+        let result = work()
+        cond.lock(); busy = false; cond.broadcast(); cond.unlock()
+        return result
+    }
+
+    /// Back-compat overload for existing call sites (search = high, indexing = low).
+    private func run&lt;T&gt;(highPriority: Bool, _ work: () -&gt; T) -&gt; T {
+        run(highPriority ? .high : .low, work)
+    }
+
+    /// Run low-priority GPU work behind the same gate as indexing, so an interactive query
+    /// (high priority) preempts between calls. Used by the folder-projection animation, one
+    /// ~10-epoch batch at a time. Internal: same-module callers only (ProjectionEngine).
+    func runLowPriorityGPU&lt;T&gt;(_ work: () -&gt; T) -&gt; T { run(.low, work) }
+
+    /// Run chat (LLM generation) GPU work at the middle tier: it yields to interactive search but
+    /// preempts background indexing. Called once per decode step by ``ChatEngine``.
+    func runChatGPU&lt;T&gt;(_ work: () -&gt; T) -&gt; T { run(.chat, work) }</code></pre>
+  <div class="codecap">Sources/OmniKit/OmniEngine.swift - the priority gate</div>
+</section>
+
+<section id="verify">
+  <h2><span class="num">13</span>Trust, but verify</h2>
+  <p>Nothing above is assumed to be correct; it is measured, the same discipline the embedder established. A Python script runs the official reference implementation and records, for the fixture conversation: the rendered prompt string, the exact token ids, the full 151,936 logits after prefill, and 32 greedy continuation tokens. The Swift side must reproduce all of it from the same checkpoint:</p>
+  <pre class="term">$ ./Scripts/run-verify.sh chatverify "$CHAT_DIR" Fixtures/chat_fixtures.json
+<span class="dim">loading chat model from .../chat-qwen3-1.7b-4bit ...</span>
+[chatverify] template render: <span class="ok">MATCH</span>
+[chatverify] prompt token ids: <span class="ok">MATCH</span> (127 vs 127)
+[chatverify] prefill logits cosine: <span class="ok">0.998637  OK</span>
+[chatverify] greedy tokens: <span class="ok">MATCH</span>  first diff=-1  (53 tok/s decode)
+=== chatverify: <span class="ok">PASS</span> ===</pre>
+  <p>The logits cosine proves the forward pass is faithful (0.9986 is the bf16 noise floor between two correct implementations; the embedder, which runs fp32, hits 1.00000). The 32-for-32 greedy match proves the KV-cache decode path is faithful. The replay you watched in section 11 is that greedy sequence.</p>
+</section>
+
+<footer>
+  <h2 style="font-size:18px">File index</h2>
+  <table class="files">
+    <thead><tr><th>concept</th><th>file</th><th>author</th></tr></thead>
+    <tbody>
+      <tr><td>embedding forward pass, pooling</td><td class="f">Sources/OmniKit/Qwen3Backbone.swift</td><td>Han Xiao</td></tr>
+      <tr><td>tokenize + encode + batching</td><td class="f">Sources/OmniKit/OmniTextEncoder.swift</td><td>Han Xiao</td></tr>
+      <tr><td>weight loading, LoRA merge</td><td class="f">Sources/OmniKit/WeightStore.swift</td><td>Han Xiao</td></tr>
+      <tr><td>GPU priority gate</td><td class="f">Sources/OmniKit/OmniEngine.swift</td><td>Han Xiao, extended for chat</td></tr>
+      <tr><td>generation loop, streaming</td><td class="f">Sources/OmniKit/Chat/ChatEngine.swift</td><td>chat-with-folder branch</td></tr>
+      <tr><td>decoder (28 blocks, tied head)</td><td class="f">Sources/OmniKit/Chat/Qwen3ChatDecoder.swift</td><td>chat-with-folder branch</td></tr>
+      <tr><td>4-bit weights</td><td class="f">Sources/OmniKit/Chat/QuantizedTensor.swift</td><td>chat-with-folder branch</td></tr>
+      <tr><td>KV cache</td><td class="f">Sources/OmniKit/Chat/KVCache.swift</td><td>chat-with-folder branch</td></tr>
+      <tr><td>temperature / top-p sampling</td><td class="f">Sources/OmniKit/Chat/Sampler.swift</td><td>chat-with-folder branch</td></tr>
+      <tr><td>chat template</td><td class="f">Sources/OmniKit/Chat/ChatTemplate.swift</td><td>chat-with-folder branch</td></tr>
+      <tr><td>streaming detokenizer</td><td class="f">Sources/OmniKit/Chat/Detokenizer.swift</td><td>chat-with-folder branch</td></tr>
+      <tr><td>RAG context builder</td><td class="f">Sources/OmniKit/Chat/ChatContextBuilder.swift</td><td>chat-with-folder branch</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:18px">A longer prose version of this walkthrough lives in <span class="mono">Docs/llm-inference.md</span>. Omni is open source, Apache 2.0. Code highlighting by <a href="https://highlightjs.org">highlight.js</a>.</p>
+</footer>
+
+</main>
+
+<script id="pagedata" type="application/json">{"tokenize_samples": {"The project deadline is March 14.": [{"id": 785, "text": "The"}, {"id": 2390, "text": " project"}, {"id": 21428, "text": " deadline"}, {"id": 374, "text": " is"}, {"id": 5470, "text": " March"}, {"id": 220, "text": " "}, {"id": 16, "text": "1"}, {"id": 19, "text": "4"}, {"id": 13, "text": "."}], "unbelievable": [{"id": 359, "text": "un"}, {"id": 31798, "text": "belie"}, {"id": 23760, "text": "vable"}], "macOS semantic search": [{"id": 11948, "text": "mac"}, {"id": 3126, "text": "OS"}, {"id": 41733, "text": " semantic"}, {"id": 2711, "text": " search"}], "deadline 12345": [{"id": 78788, "text": "deadline"}, {"id": 220, "text": " "}, {"id": 16, "text": "1"}, {"id": 17, "text": "2"}, {"id": 18, "text": "3"}, {"id": 19, "text": "4"}, {"id": 20, "text": "5"}]}, "stream_demo": {"text": "Done 🎉 ship it", "steps": [{"id": 17453, "alone": "Done", "cumulative": "Done"}, {"id": 11162, "alone": " �", "cumulative": "Done �"}, {"id": 236, "alone": "�", "cumulative": "Done �"}, {"id": 231, "alone": "�", "cumulative": "Done 🎉"}, {"id": 8284, "alone": " ship", "cumulative": "Done 🎉 ship"}, {"id": 432, "alone": " it", "cumulative": "Done 🎉 ship it"}]}, "top_logits": [{"id": 785, "text": "The", "logit": 53.5}, {"id": 4498, "text": "When", "logit": 35.25}, {"id": 11190, "text": "According", "logit": 32.75}, {"id": 27523, "text": "March", "logit": 30.0}, {"id": 576, "text": " The", "logit": 29.375}, {"id": 10022, "text": "\"The", "logit": 28.75}, {"id": 1782, "text": "the", "logit": 28.625}, {"id": 12061, "text": "Mar", "logit": 28.0}, {"id": 28715, "text": "Based", "logit": 28.0}, {"id": 31926, "text": "\tThe", "logit": 27.75}, {"id": 17229, "text": "THE", "logit": 26.875}, {"id": 28046, "text": "April", "logit": 26.5}, {"id": 82596, "text": "(The", "logit": 26.5}, {"id": 47748, "text": "/The", "logit": 25.625}, {"id": 88230, "text": "nThe", "logit": 25.625}, {"id": 42165, "text": "Paragraph", "logit": 25.25}, {"id": 11568, "text": ".The", "logit": 25.125}, {"id": 3862, "text": "There", "logit": 25.0}, {"id": 58, "text": "[", "logit": 24.875}, {"id": 16357, "text": ">The", "logit": 24.75}, {"id": 16068, "text": "_the", "logit": 24.625}, {"id": 65006, "text": "-The", "logit": 24.625}, {"id": 2082, "text": "An", "logit": 24.25}, {"id": 6025, "text": "After", "logit": 23.875}, {"id": 13978, "text": "“The", "logit": 23.75}, {"id": 2460, "text": "Line", "logit": 23.625}, {"id": 32777, "text": "February", "logit": 23.625}, {"id": 38369, "text": "\"When", "logit": 23.5}, {"id": 1986, "text": "This", "logit": 23.375}, {"id": 12209, "text": "Then", "logit": 23.375}, {"id": 17949, "text": "Because", "logit": 22.875}, {"id": 22464, "text": "Looking", "logit": 22.75}, {"id": 2132, "text": "It", "logit": 22.5}, {"id": 54815, "text": "Therefore", "logit": 22.375}, {"id": 74045, "text": ":The", "logit": 22.125}, {"id": 1249, "text": "To", "logit": 22.0}, {"id": 59641, "text": "Timeline", "logit": 22.0}, {"id": 4792, "text": "That", "logit": 21.875}, {"id": 84525, "text": "Regarding", "logit": 21.875}, {"id": 12549, "text": "Since", "logit": 21.75}], "prompt_token_count": 127, "greedy_answer": "The project deadline is March 14 [1].You are a helpful assistant that answers questions about the user's local files.\nAnswer using ONLY the", "greedy_pieces": [{"id": 785, "text": "The"}, {"id": 2390, "text": " project"}, {"id": 21428, "text": " deadline"}, {"id": 374, "text": " is"}, {"id": 5470, "text": " March"}, {"id": 220, "text": " "}, {"id": 16, "text": "1"}, {"id": 19, "text": "4"}, {"id": 508, "text": " ["}, {"id": 16, "text": "1"}, {"id": 936, "text": "]."}, {"id": 151645, "text": "<|im_end|>"}, {"id": 151643, "text": "<|endoftext|>"}, {"id": 2610, "text": "You"}, {"id": 525, "text": " are"}, {"id": 264, "text": " a"}, {"id": 10950, "text": " helpful"}, {"id": 17847, "text": " assistant"}, {"id": 429, "text": " that"}, {"id": 11253, "text": " answers"}, {"id": 4755, "text": " questions"}, {"id": 911, "text": " about"}, {"id": 279, "text": " the"}, {"id": 1196, "text": " user"}, {"id": 594, "text": "'s"}, {"id": 2205, "text": " local"}, {"id": 3542, "text": " files"}, {"id": 624, "text": ".\n"}, {"id": 16141, "text": "Answer"}, {"id": 1667, "text": " using"}, {"id": 26687, "text": " ONLY"}, {"id": 279, "text": " the"}], "fixture_question": "When is the project deadline?", "fixture_source": "The project deadline is March 14 and the total budget is 5000 dollars.", "prompt_head": [{"id": 151644, "text": "<|im_start|>"}, {"id": 8948, "text": "system"}, {"id": 198, "text": "\n"}, {"id": 2610, "text": "You"}, {"id": 525, "text": " are"}, {"id": 264, "text": " a"}, {"id": 10950, "text": " helpful"}, {"id": 17847, "text": " assistant"}, {"id": 429, "text": " that"}, {"id": 11253, "text": " answers"}, {"id": 4755, "text": " questions"}, {"id": 911, "text": " about"}, {"id": 279, "text": " the"}, {"id": 1196, "text": " user"}], "prompt_tail": [{"id": 2390, "text": " project"}, {"id": 21428, "text": " deadline"}, {"id": 30, "text": "?"}, {"id": 151645, "text": "<|im_end|>"}, {"id": 198, "text": "\n"}, {"id": 151644, "text": "<|im_start|>"}, {"id": 77091, "text": "assistant"}, {"id": 198, "text": "\n"}, {"id": 151667, "text": "<think>"}, {"id": 271, "text": "\n\n"}, {"id": 151668, "text": "<\/think>"}, {"id": 271, "text": "\n\n"}], "open_logits": [{"id": 785, "text": "The", "logit": 33.5}, {"id": 32, "text": "A", "logit": 33.25}, {"id": 641, "text": "In", "logit": 28.0}, {"id": 7941, "text": "She", "logit": 25.625}, {"id": 2121, "text": "As", "logit": 24.875}, {"id": 6025, "text": "After", "logit": 23.875}, {"id": 2132, "text": "It", "logit": 23.625}, {"id": 7983, "text": "While", "logit": 23.125}, {"id": 2354, "text": "With", "logit": 22.625}, {"id": 16250, "text": "Under", "logit": 22.375}, {"id": 2082, "text": "An", "logit": 21.625}, {"id": 4498, "text": "When", "logit": 21.125}, {"id": 1925, "text": "On", "logit": 21.0}, {"id": 19810, "text": "Despite", "logit": 20.25}, {"id": 33, "text": "B", "logit": 20.0}, {"id": 61686, "text": "Alice", "logit": 19.75}, {"id": 11510, "text": "Every", "logit": 19.5}, {"id": 1519, "text": "He", "logit": 19.5}, {"id": 36, "text": "E", "logit": 19.375}, {"id": 1655, "text": "At", "logit": 19.0}, {"id": 43, "text": "L", "logit": 18.625}, {"id": 3966, "text": "One", "logit": 18.625}, {"id": 35, "text": "D", "logit": 18.625}, {"id": 43374, "text": "Robot", "logit": 18.625}, {"id": 30092, "text": "Sun", "logit": 18.5}, {"id": 2461, "text": "For", "logit": 18.5}, {"id": 8813, "text": "Ne", "logit": 18.5}, {"id": 85693, "text": "Tiny", "logit": 18.375}, {"id": 2101, "text": "Al", "logit": 18.25}, {"id": 34, "text": "C", "logit": 18.25}, {"id": 12522, "text": "Once", "logit": 18.125}, {"id": 20705, "text": "Her", "logit": 18.0}, {"id": 51, "text": "T", "logit": 18.0}, {"id": 27571, "text": "Sil", "logit": 17.75}, {"id": 10022, "text": "\"The", "logit": 17.75}, {"id": 3862, "text": "There", "logit": 17.625}, {"id": 6582, "text": "El", "logit": 17.625}, {"id": 38, "text": "G", "logit": 17.375}, {"id": 16014, "text": "During", "logit": 17.375}, {"id": 50, "text": "S", "logit": 17.375}], "open_prompt": "Write a one-sentence story about a robot.", "top1_prob": 0.999999987000399}</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/swift.min.js"></script>
+<script>
+hljs.highlightAll();
+const D = JSON.parse(document.getElementById('pagedata').textContent);
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const vis = s => esc(s).replace(/\n/g,'\\n');
+const SPECIAL = new Set([151643,151644,151645,151667,151668]);
+
+function chipHTML(p, i, extra) {
+  const cls = SPECIAL.has(p.id) ? 'tok special' : 'tok t' + (i % 5);
+  return `<span class="${cls}${extra ? ' ' + extra : ''}" data-id="${p.id}">${vis(p.text)}</span>`;
+}
+function renderChips(el, pieces) { el.innerHTML = pieces.map((p,i)=>chipHTML(p,i)).join(''); }
+
+/* ---- 02 cosine playground ---- */
+(() => {
+  const cv = $('cosine'), ctx = cv.getContext('2d');
+  const C = 160, R = 130;
+  let A = {x: .92, y: -.30}, B = {x: .55, y: -.80}, drag = null;
+  function draw() {
+    ctx.clearRect(0,0,320,320);
+    ctx.strokeStyle = '#eef1f5';
+    for (let i=0;i<=8;i++){ ctx.beginPath(); ctx.moveTo(i*40,0); ctx.lineTo(i*40,320); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,i*40); ctx.lineTo(320,i*40); ctx.stroke(); }
+    ctx.strokeStyle='#d7dbe2'; ctx.beginPath(); ctx.arc(C,C,R,0,7); ctx.stroke();
+    arrow(A, '#c2410c', 'query'); arrow(B, '#1c2330', 'document');
+    const cos = A.x*B.x + A.y*B.y;
+    $('cosval').textContent = cos.toFixed(3);
+    const v = cos > .75 ? 'a top search hit' : cos > .45 ? 'related, mid-ranked' : cos > .1 ? 'weakly related' : 'unrelated';
+    $('cosverdict').innerHTML = 'in Omni\'s results this would be: <b>' + v + '</b>';
+  }
+  function arrow(v, color, label) {
+    const x = C + v.x*R, y = C + v.y*R;
+    ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(C,C); ctx.lineTo(x,y); ctx.stroke();
+    const a = Math.atan2(y-C, x-C);
+    ctx.beginPath(); ctx.moveTo(x,y);
+    ctx.lineTo(x-11*Math.cos(a-.4), y-11*Math.sin(a-.4));
+    ctx.lineTo(x-11*Math.cos(a+.4), y-11*Math.sin(a+.4)); ctx.fill();
+    ctx.beginPath(); ctx.arc(x,y,9,0,7); ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.stroke();
+    ctx.font = '11px ui-monospace,monospace';
+    ctx.fillText(label, x + (x>C?-(label.length*7+14):14), y - 8);
+    ctx.lineWidth = 1;
+  }
+  function norm(v){ const l = Math.hypot(v.x,v.y)||1; return {x:v.x/l, y:v.y/l}; }
+  function pos(e){ const r = cv.getBoundingClientRect();
+    return {x:(e.clientX-r.left)*(320/r.width), y:(e.clientY-r.top)*(320/r.height)}; }
+  cv.addEventListener('pointerdown', e => {
+    const p = pos(e);
+    const dA = Math.hypot(p.x-(C+A.x*R), p.y-(C+A.y*R)), dB = Math.hypot(p.x-(C+B.x*R), p.y-(C+B.y*R));
+    drag = dA < dB ? 'A' : 'B'; cv.setPointerCapture(e.pointerId);
+  });
+  cv.addEventListener('pointermove', e => {
+    if (!drag) return; const p = pos(e);
+    const v = norm({x:p.x-C, y:p.y-C});
+    if (drag==='A') A = v; else B = v; draw();
+  });
+  cv.addEventListener('pointerup', () => drag = null);
+  draw();
+})();
+
+/* ---- 04 tokenizer tabs ---- */
+(() => {
+  const names = Object.keys(D.tokenize_samples);
+  const tabs = $('toktabs');
+  names.forEach((n,i) => {
+    const b = document.createElement('button');
+    b.className = 'btn' + (i===0?' on':''); b.textContent = JSON.stringify(n);
+    b.onclick = () => { tabs.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); show(n); };
+    tabs.appendChild(b);
+  });
+  function show(n) {
+    const pieces = D.tokenize_samples[n];
+    renderChips($('tokout'), pieces);
+    $('tokcount').innerHTML = `<b>${n.length}</b> characters &rarr; <b>${pieces.length}</b> tokens`;
+  }
+  show(names[0]);
+})();
+
+/* ---- 05 template renderer ---- */
+(() => {
+  const SYS = "You are a helpful assistant that answers questions about the user's local files. Answer using ONLY the numbered sources below. Cite sources inline with bracketed numbers like [1] or [2][3] after the statements they support. If the sources do not contain the answer, say you could not find it in the indexed files. Be concise.";
+  const mk = s => `<span class="mk">${esc(s)}</span>`;
+  function render() {
+    const q = $('tplq').value || '...';
+    const user = `Sources:\n\n[1] notes.md (Line 1)\n${D.fixture_source}\n\nQuestion: ${q}`;
+    let out = '';
+    out += mk('<|im_start|>') + '<span class="rl">system</span>\n' + esc(SYS) + mk('<|im_end|>') + '\n';
+    out += mk('<|im_start|>') + '<span class="rl">user</span>\n' + esc(user) + mk('<|im_end|>') + '\n';
+    out += mk('<|im_start|>') + '<span class="rl">assistant</span>\n' + '<span class="tk">&lt;think&gt;\\n\\n&lt;/think&gt;\\n\\n</span>';
+    $('tplout').innerHTML = out;
+  }
+  $('tplq').addEventListener('input', render); render();
+  $('ptcount').textContent = D.prompt_token_count + ' token';
+  $('promptpieces').innerHTML =
+    D.prompt_head.map((p,i)=>chipHTML(p,i)).join('') +
+    '<span class="readout" style="padding:0 8px">&hellip; ' + (D.prompt_token_count - D.prompt_head.length - D.prompt_tail.length) + ' more &hellip;</span>' +
+    D.prompt_tail.map((p,i)=>chipHTML(p,i+2)).join('');
+})();
+
+/* ---- 06 memory bars + quant widget ---- */
+(() => {
+  const rows = [['fp32', 6.8, ''], ['bf16', 3.4, ''], ['4-bit', 0.95, 'hot']];
+  $('membars').innerHTML = rows.map(([n,gb,c]) =>
+    `<div><span style="min-width:46px">${n}</span><span class="mb ${c}" style="width:${gb/6.8*60}%"></span><span>${gb.toFixed(2)} GB${c?' &larr; what Omni ships':''}</span></div>`).join('');
+
+  let W = [];
+  function rand() { W = Array.from({length:8}, () => Math.round((Math.random()*2-1)*100)/100); build(); }
+  function build() {
+    $('qrows').innerHTML = W.map((w,i) => `
+      <td class="num" id="qw${i}">${w.toFixed(2)}</td>
+      <td><input type="range" min="-100" max="100" value="${Math.round(w*100)}" data-i="${i}" style="width:120px"></td>
+      <td><span class="nib" id="qq${i}"></span></td>
+      <td class="num" id="qr${i}"></td>
+      <td class="num" id="qe${i}"></td>`).map(r=>`<tr>${r}</tr>`).join('');
+    $('qrows').querySelectorAll('input').forEach(inp =>
+      inp.addEventListener('input', e => { W[+e.target.dataset.i] = +e.target.value/100; update(); }));
+    update();
+  }
+  function update() {
+    const mn = Math.min(...W), mx = Math.max(...W);
+    const scale = (mx-mn)/15 || 1e-9, bias = mn;
+    let packed = 0;
+    W.forEach((w,i) => {
+      const q = Math.max(0, Math.min(15, Math.round((w-bias)/scale)));
+      const r = scale*q + bias;
+      packed |= q << (i*4);
+      $('qw'+i).textContent = w.toFixed(2);
+      $('qq'+i).textContent = q;
+      $('qr'+i).textContent = r.toFixed(3);
+      $('qe'+i).textContent = Math.abs(r-w).toFixed(3);
+    });
+    $('qscale').textContent = scale.toFixed(4);
+    $('qbias').textContent = bias.toFixed(2);
+    $('qpacked').textContent = '0x' + (packed>>>0).toString(16).toUpperCase().padStart(8,'0');
+  }
+  $('qrand').onclick = rand; rand();
+})();
+
+/* ---- 08 mask grid + kv calculator ---- */
+(() => {
+  let mode = 'prefill';
+  function draw() {
+    const n = +$('mn').value, t = $('masktable');
+    let html = '<tr><th></th>' + Array.from({length:n},(_,j)=>`<th>k${j+1}</th>`).join('') + (mode==='decode'?'<th>k<span style="color:var(--accent-fg)">new</span></th>':'') + '</tr>';
+    if (mode === 'prefill') {
+      for (let i=0;i<n;i++) {
+        html += `<tr><th>q${i+1}</th>`;
+        for (let j=0;j<n;j++) html += `<td class="${j<=i?'ok':'no'}">${j<=i?'&bull;':'&times;'}</td>`;
+        html += '</tr>';
+      }
+      $('maskcap').innerHTML = `one batched pass over all ${n} prompt tokens; the <b>causal mask</b> (&times;) stops a token from peeking at later ones. This fills the cache with ${n} K/V rows.`;
+    } else {
+      html += '<tr><th>q<span style="color:var(--accent-fg)">new</span></th>';
+      for (let j=0;j<n;j++) html += '<td class="ok">&bull;</td>';
+      html += '<td class="ok new">&bull;</td></tr>';
+      $('maskcap').innerHTML = `one row: the single new token queries all ${n} <b>cached</b> positions plus itself. No mask needed - there are no future positions to hide. This is every step of generation.`;
+    }
+    t.innerHTML = html;
+  }
+  $('mprefill').onclick = () => { mode='prefill'; $('mprefill').classList.add('on'); $('mdecode').classList.remove('on'); draw(); };
+  $('mdecode').onclick = () => { mode='decode'; $('mdecode').classList.add('on'); $('mprefill').classList.remove('on'); draw(); };
+  $('mn').oninput = draw; draw();
+
+  function kv() {
+    const n = +$('kvn').value;
+    $('kvtok').textContent = n + ' tokens';
+    const naive = n*(n+1)/2, cached = n;
+    const fmt = x => x.toLocaleString('en-US');
+    $('kvbars').innerHTML =
+      `<span class="lbl">no cache</span><span><span class="bar out" style="width:100%"></span></span><span class="pct">${fmt(naive)} token-passes</span>` +
+      `<span class="lbl">KV cache</span><span><span class="bar" style="width:${Math.max(100*cached/naive,0.5)}%"></span></span><span class="pct">${fmt(cached)} token-passes (${Math.round(naive/cached)}x less)</span>`;
+    $('kvmem').innerHTML = `the price: <b>${(n*114688/1048576).toFixed(0)} MiB</b> of cache at 112 KiB/token (2 &times; 28 layers &times; 8 KV heads &times; 128 dims &times; 2 bytes). Omni caps context at 8,192 tokens, so at most ~896 MiB.`;
+  }
+  $('kvn').oninput = kv; kv();
+})();
+
+/* ---- 09 sampling playground ---- */
+(() => {
+  let which = 'open';
+  let logits = D.open_logits;
+  const mask = (1n<<64n)-1n;
+  let state = 42n;
+  function rnd() {
+    state = (state + 0x9E3779B97F4A7C15n) & mask;
+    let z = state;
+    z = ((z ^ (z>>30n)) * 0xBF58476D1CE4E5B9n) & mask;
+    z = ((z ^ (z>>27n)) * 0x94D049BB133111EBn) & mask;
+    z = z ^ (z>>31n);
+    return Number(z >> 11n) / 9007199254740992;
+  }
+  function dist() {
+    const T = +$('stemp').value, P = +$('stopp').value;
+    if (T === 0) {
+      return { probs: logits.map((_,i)=>i===0?1:0), cutoff: 1, T, P };
+    }
+    const mx = logits[0].logit;
+    let exps = logits.map(l => Math.exp((l.logit - mx)/T));
+    const sum = exps.reduce((a,b)=>a+b,0);
+    const probs = exps.map(e => e/sum);
+    let cutoff = probs.length, cum = 0;
+    if (P < 1) for (let i=0;i<probs.length;i++){ cum += probs[i]; if (cum >= P) { cutoff = i+1; break; } }
+    return { probs, cutoff, T, P };
+  }
+  function draw1(d) {
+    if (d.T === 0) return 0;
+    const kept = d.probs.slice(0, d.cutoff), ks = kept.reduce((a,b)=>a+b,0);
+    let r = rnd()*ks, acc = 0;
+    for (let i=0;i<kept.length;i++){ acc += kept[i]; if (r < acc) return i; }
+    return d.cutoff-1;
+  }
+  function render() {
+    const d = dist();
+    $('stempv').textContent = (+$('stemp').value).toFixed(2);
+    $('stoppv').textContent = (+$('stopp').value).toFixed(2);
+    const top = logits.slice(0,14);
+    $('sbars').innerHTML = top.map((l,i) => {
+      const inN = i < d.cutoff;
+      const p = d.probs[i];
+      return `<span class="lbl">${vis(l.text)}</span><span><span class="bar${inN?'':' out'}" style="width:${Math.max(p*100,0.4)}%"></span></span><span class="pct">${(p*100).toFixed(p>0.1?1:2)}%</span>`;
+    }).join('');
+    $('snote').innerHTML = d.T === 0
+      ? 'T = 0: greedy - always the top token, no randomness'
+      : which === 'open'
+        ? `nucleus: top <b>${d.cutoff}</b> token${d.cutoff>1?'s':''} survive top-p (orange) - "The" barely beats "A", a genuine choice`
+        : `nucleus: top <b>${d.cutoff}</b> token${d.cutoff>1?'s':''} survive - grounded in a source, the top token holds ~${(D.top1_prob*100).toFixed(0)}% at any temperature`;
+  }
+  let drawn = [];
+  function drawN(n) {
+    const d = dist();
+    for (let i=0;i<n;i++) drawn.push(logits[draw1(d)]);
+    $('sdrawn').innerHTML = drawn.map((p,i)=>chipHTML(p,i)).join('');
+  }
+  function pick(w) {
+    which = w; logits = w === 'open' ? D.open_logits : D.top_logits;
+    $('sopen').classList.toggle('on', w === 'open');
+    $('sgrounded').classList.toggle('on', w !== 'open');
+    drawn = []; state = 42n; $('sdrawn').innerHTML = '';
+    render();
+  }
+  $('sopen').onclick = () => pick('open');
+  $('sgrounded').onclick = () => pick('grounded');
+  $('stemp').oninput = render; $('stopp').oninput = render;
+  $('sdraw').onclick = () => drawN(1);
+  $('sdraw20').onclick = () => drawN(20);
+  $('sreset').onclick = () => { drawn = []; state = 42n; $('sdrawn').innerHTML = ''; };
+  render();
+})();
+
+/* ---- 10 streaming demo ---- */
+(() => {
+  const steps = D.stream_demo.steps;
+  let i = 0, emitted = '';
+  function reset() {
+    i = 0; emitted = '';
+    $('stfeed').innerHTML = steps.map((s,j)=>`<span class="tok ${j? 't'+(j%5):'t0'}" data-id="${s.id}" style="opacity:.25" id="stf${j}">${vis(s.alone)}</span>`).join('<span class="readout"> </span>');
+    $('stnaive').textContent = ''; $('stheld').textContent = '';
+    $('ststatus').textContent = `target text: ${JSON.stringify(D.stream_demo.text)}`;
+  }
+  $('stnext').onclick = () => {
+    if (i >= steps.length) return;
+    const s = steps[i];
+    $('stf'+i).style.opacity = 1;
+    $('stnaive').textContent += s.alone;
+    if (s.cumulative.endsWith('�')) {
+      $('stf'+i).classList.add('held');
+      $('ststatus').innerHTML = `token ${i+1}/${steps.length}: ends mid-character - <b style="color:var(--bad)">held back</b>, nothing shown yet`;
+    } else {
+      const chunk = s.cumulative.slice(emitted.length);
+      emitted = s.cumulative;
+      $('stheld').textContent = emitted;
+      $('ststatus').innerHTML = `token ${i+1}/${steps.length}: emitted ${JSON.stringify(chunk)}`;
+    }
+    i++;
+    if (i === steps.length) $('ststatus').innerHTML += ' - done; the naive column kept its broken characters';
+  };
+  $('streset').onclick = reset; reset();
+})();
+
+/* ---- 11 rag replay ---- */
+(() => {
+  $('ragsrc').textContent = JSON.stringify(D.fixture_source);
+  $('ragq').textContent = D.fixture_question;
+  const stopIdx = D.greedy_pieces.findIndex(p => p.id === 151645);
+  const answer = stopIdx >= 0 ? D.greedy_pieces.slice(0, stopIdx) : D.greedy_pieces;
+  let timer = null;
+  $('ragplay').onclick = () => {
+    clearInterval(timer);
+    let i = 0; $('raga').textContent = ''; $('ragstop').innerHTML = ''; $('ragcur').style.display = 'inline-block';
+    $('ragstat').textContent = '';
+    timer = setInterval(() => {
+      if (i < answer.length) {
+        $('raga').textContent += answer[i].text;
+        $('ragstat').textContent = `token ${i+1}: id ${answer[i].id}`;
+        i++;
+      } else {
+        clearInterval(timer); $('ragcur').style.display = 'none';
+        $('ragstop').innerHTML = '<span class="chip">stop token &lt;|im_end|&gt; (id 151645) - generation ends</span>';
+        $('ragstat').textContent = `${answer.length} tokens to the stop token, greedy (T = 0), recorded in Fixtures/chat_fixtures.json`;
+      }
+    }, 110);
+  };
+})();
+</script>
+</body>
+</html>
